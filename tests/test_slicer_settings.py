@@ -273,7 +273,7 @@ class SettingsTests(unittest.TestCase):
     def test_registry_and_protocol(self):
         tools = self.dispatch({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]
         self.assertEqual(tools, self.tools.list_tools())
-        self.assertEqual([t["name"] for t in tools], ["assistant_status", "get_setting", "set_setting"])
+        self.assertEqual([t["name"] for t in tools], ["assistant_status", "get_setting", "set_setting", "get_slicer_state", "set_print_mode", "list_quality_profiles", "list_materials", "select_profile", "select_material"])
         schema = tools[2]["inputSchema"]
         self.assertEqual(set(schema["required"]), {"key", "scope", "value"})
         self.assertEqual(schema["properties"]["value"]["exclusiveMinimum"], 0)

@@ -1,4 +1,5 @@
 import threading
+import time
 
 
 class SlicerError(Exception):
@@ -43,12 +44,21 @@ class QtBridge(object):
                     call.event.set()
             self._pending.clear()
 
-    def run(self, operation):
+    def is_main_thread(self):
+        return threading.current_thread() is self._main_thread
+
+    def ensure_open(self):
+        with self._lock:
+            if self._closed:
+                raise self._disconnected()
+
+    def run(self, operation, timeout=None):
+        deadline = time.monotonic() + (self._timeout if timeout is None else max(0, timeout))
         call = _Call()
         with self._lock:
             if self._closed:
                 raise self._disconnected()
-            direct = threading.current_thread() is self._main_thread
+            direct = self.is_main_thread()
             if not direct:
                 self._pending.add(call)
         if direct:
@@ -57,6 +67,12 @@ class QtBridge(object):
         def invoke():
             with self._lock:
                 if call.state != "pending":
+                    return
+                if time.monotonic() >= deadline:
+                    call.state = "cancelled"
+                    call.exception = SlicerError("qt_timeout", "Qt не начал операцию вовремя; отложенный вызов отменён.")
+                    self._pending.discard(call)
+                    call.event.set()
                     return
                 call.state = "running"
             try:
@@ -76,7 +92,7 @@ class QtBridge(object):
                 call.state = "cancelled"
                 self._pending.discard(call)
             raise
-        call.event.wait(self._timeout)
+        call.event.wait(max(0, deadline - time.monotonic()))
         with self._lock:
             if call.state == "pending":
                 call.state = "cancelled"

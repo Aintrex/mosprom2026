@@ -4,6 +4,8 @@
 
 **Статус:** раздел 2 описывает имеющийся код. Разделы 3–7 задают целевой контракт для реализации; эти маршруты сейчас отсутствуют. Создание этого файла не означает их реализацию или ручную приёмку ТЗ 01. Фронтендер может готовить компоненты и явно обозначенные локальные моки по целевому контракту.
 
+Следующая интеграция моделей описана в [ТЗ 04](tasks/TASK_04_MODEL_LOADING.md). Инструменты load_model/list_models/get_model_bounds пока не реализованы; после реализации исполнитель добавит их фактические схемы и ошибки в раздел 2. HTTP-upload этим заданием не добавляется.
+
 ## 1. Общие правила
 
 - Базовый адрес — origin открытого чата: `http://127.0.0.1:<port>`. Порт выбирается при запуске, не фиксировать `50998` или другой номер в коде.
@@ -38,6 +40,34 @@
 - `assistant_status`, аргументы `{}`: диагностирует объём реализации; не подтверждает реальный runtime.
 - `get_setting`, аргументы `{"key":"layer_height","scope":"global"}`.
 - `set_setting`, аргументы `{"key":"layer_height","scope":"global","value":0.24}`.
+- `get_slicer_state`, аргументы `{}`: состояние приложения, активной машины, режима и backend.
+- `set_print_mode`, аргументы `{"mode":"classic"}`: разрешены только `classic`, `cylindrical`, `cylindrical_full`; подтверждает настройку и выбранный backend. Вызывать на пустой сцене, без активной нарезки.
+- `list_quality_profiles`, аргументы `{}`: все встроенные QualityGroup текущей конфигурации, включая недоступные.
+- `list_materials`, аргументы `{"extruder_id":"0"}`: материалы под конкретную позицию экструдера и текущее сопло/диаметр/платформу.
+- `select_profile`, аргументы `{"quality_type":"runtime-quality-type"}`: выбор доступной встроенной QualityGroup с сохранением overrides.
+- `select_material`, аргументы `{"extruder_id":"0","root_material_id":"runtime-root-id"}`: выбор материала указанного экструдера с подтверждением resolved container.
+
+У новых инструментов лишние поля запрещены. `set_setting` остаётся ограниченным `layer_height`, передавать ему `printing_mode` нельзя. ТЗ 02 принято после 45 автоматических проверок и реального прогона в STE Slicer 7.10.12 на Hybrid 530 V5.2.4: диагностика, три режима, backend, UI и восстановление подтверждены. Это не проверка слайсинга или экспорта.
+
+Инструменты ТЗ 03 реализованы и проверены с подменами; их runtime-приёмка ещё не проводилась. ID — непустые строки; `extruder_id` — ключ позиции из `global_stack.extruders` (например, `"0"`), а не подпись кнопки UI и не числовое значение. UI-экструдер ради операций не переключается. Названия не заменяют ID.
+
+`list_quality_profiles` возвращает `{machine_id,current:{quality_type,name,custom_profile_id,has_user_settings},profiles:[{quality_type,name,available,layer_height_mm}]}` внутри `ok/data`. Высота — число из базового quality-контейнера или definition, не override активного стека. Невычисляемое надёжно значение (в том числе SettingFunction) — null. Custom ID — ID глобального узла QualityChangesGroup, при его отсутствии — первого экструдерного узла; при отсутствии custom — null. Создание, изменение и выбор custom-профиля в этот объём не входят.
+
+`list_materials` возвращает `{machine_id,extruder_id,current,materials}`. `current` — `{root_material_id,material_id,name}` из материала указанного экструдера (root из metadata.base_file, при отсутствии — currentRootMaterialId этой позиции), либо null при отсутствии материала. Элемент `materials`: `{root_material_id,material_id,name,brand,material,compatible}`. Список берётся из `getAvailableMaterialsForMachineExtruder`, removed-пакеты исключаются. Root ID и resolved material ID сохраняются отдельно. Неизвестная совместимость — null; явная несовместимость запрещает выбор. Отсутствующие name/brand/material — null.
+
+`select_profile` возвращает `{before:{quality_type,name,custom_profile_id},after:{quality_type,name,custom_profile_id},has_user_settings}`. Подтверждаются не только quality_type, но и фактически установленные global/extruder quality container ID; custom не должен остаться активным. Штатный вызов — `setQualityGroup(group,no_dialog=True)`, без очистки userChanges. При активном custom-профиле изменение отклоняется до setter, даже если underlying quality_type совпадает.
+
+`select_material` возвращает `{extruder_id,before,after,quality_type_after,has_user_settings}`; before/after имеют форму `current` из списка материалов. Подтверждаются root ID и ожидаемый resolved container для указанной позиции. Материал может изменить качество, поэтому после выбора обязательно перечитать `list_quality_profiles`; сохранение прежних зависимых температур/скоростей не обещается.
+
+Для выбора материала no-op проверяется до политики диалогов. Для реального изменения при overrides требуется штатная `choice_on_profile_override=always_keep`, иначе `user_changes_present` **до setter**. Preferences не меняются. Проверка консервативна и не зависит от текущего UI active_mode. При активном custom также запрещена реальная смена материала: штатный API может сбросить custom при смене доступной группы качества. Оба ограничения снимаются пользователем в приложении по отдельному решению, не автоматически инструментом.
+
+Выбор выполняется из worker, отдельными короткими Qt-вызовами с общим бюджетом 5 секунд. Режим/качество/материал используют общую неблокирующую блокировку (`switch_in_progress` для режима, `selection_busy` для нового выбора). Повторный подтверждённый выбор не вызывает setter; смена машины/экструдеров/lookup или потеря overrides не считается успехом. После ошибки требуется перечитать списки и состояние; автоматического отката/повтора нет. Отмена pending-callback при timeout/shutdown сохранена.
+
+`get_slicer_state` возвращает `{ok:true,data:{connected,application_version,machine,printing_mode,backend,available_modes}}`. `machine` — `{id,name,definition_id}`, значения берутся из активного стека. `backend` — `{id,expected_id,matches_mode}`: ID из runtime-объектов, `matches_mode` проверяет идентичность текущего backend ожидаемому объекту менеджера. При отсутствии current/expected ID равны null, `matches_mode=false`. Нет активной машины — успешная диагностика с `connected=true`, `machine=null`, `printing_mode=null`, `backend=null`, `available_modes=[]`. Это не готовность к печати.
+
+`available_modes` содержит только поддержанные машиной режимы кейса (из enum, для 5D также `machine_five_axis=true`), элементы `{id,label,backend_available}`. Метки берутся из enum текущего стека, `backend_available` — только наличие регистрации, не работоспособность движка или лицензии. Если текущий режим вне трёх разрешённых, диагностика сохраняет его фактическую строку; `set_print_mode` такой режим отклоняет.
+
+Успех `set_print_mode`: `{ok:true,data:{before,after,backend:{id,expected_id,matches_mode:true}}}`. Настройка и backend подтверждаются в отдельных Qt-вызовах после штатных queued-сигналов; общий бюджет — 5 секунд. Уже согласованный режим не записывается повторно. Параллельное переключение отклоняется; синхронный вызов из Qt-потока запрещён до записи. При ошибке после начала записи требуется `get_slicer_state`, откат и автоматический повтор не выполняются. Защита от активного слайсинга в этом объёме не реализована: у исследованного общего API Backend нет getter текущего состояния, применяется ограничение проверки пустой сценой.
 
 Пример запроса:
 
@@ -51,9 +81,9 @@
 {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"ok\":true,\"data\":{\"key\":\"layer_height\",\"scope\":\"global\",\"value\":0.2,\"unit\":\"mm\"}}"}],"isError":false}}
 ```
 
-Операционная ошибка get/set находится в JSON-тексте `content`: `{"ok":false,"error":{"code":"slicer_not_connected","message":"..."}}`, MCP выставляет `isError:true`. Неверные аргументы/неизвестный инструмент — JSON-RPC `error.code=-32602`, не операционный успех. Текущие коды операций: `slicer_not_connected`, `no_active_machine`, `setting_unavailable`, `setting_out_of_range`, `qt_timeout`, `setting_not_applied`, `slicer_error`.
+Операционная ошибка инструментов слайсера находится в JSON-тексте `content`: `{"ok":false,"error":{"code":"slicer_not_connected","message":"..."}}`, MCP выставляет `isError:true`. Неверные аргументы/неизвестный инструмент — JSON-RPC `error.code=-32602`, не операционный успех. Коды операций ТЗ 01: `slicer_not_connected`, `no_active_machine`, `setting_unavailable`, `setting_out_of_range`, `qt_timeout`, `setting_not_applied`, `slicer_error`. ТЗ 02 дополнительно использует `mode_unavailable`, `backend_unavailable`, `mode_not_applied`, `backend_not_switched`, `switch_in_progress`. ТЗ 03: `extruder_not_found`, `profile_not_available`, `material_not_available`, `custom_profile_active`, `user_changes_present`, `selection_not_applied`, `selection_busy`. Неизвестный синтаксически корректный ID — операционная ошибка до записи. Внутренняя ошибка API не выдаётся за Unknown tool.
 
-У `assistant_status` сейчас отдельный диагностический формат без обёртки `ok/data`. Не считать все ответы MCP одинаковыми. В dev-сервере get/set отвечают `slicer_not_connected`. ТЗ 01 принято в STE Slicer 7.10.12 на Hybrid 530 V5.2.4, 3D; чтение, изменение и восстановление layer_height подтверждены API/UI. Это не делает доступными целевые REST-маршруты ниже.
+У `assistant_status` сейчас отдельный диагностический формат без обёртки `ok/data`. Не считать все ответы MCP одинаковыми. Он перечисляет восемь реализованных инструментов слайсера, но сохраняет `llm_connected=false` и `runtime_verified=false`; прошлый прогон не подтверждает новый код. В dev-сервере все восемь инструментов слайсера отвечают `slicer_not_connected`. ТЗ 01 принято в STE Slicer 7.10.12 на Hybrid 530 V5.2.4, 3D; чтение, изменение и восстановление layer_height подтверждены API/UI. Это не делает доступными целевые REST-маршруты ниже.
 
 Основному чату SPA не нужно самостоятельно отправлять операции MCP. Для UI действия агента придут как события целевого REST API. `/mcp` остаётся общей границей инструментов и средством диагностики.
 
