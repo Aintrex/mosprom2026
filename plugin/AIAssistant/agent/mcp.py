@@ -1,47 +1,58 @@
+# -*- coding: utf-8 -*-
 import json
-
-from .tools import UnknownToolError
-
-
-def error(request_id, code, message):
-    return {"jsonrpc": "2.0", "id": request_id,
-            "error": {"code": code, "message": message}}
+from .tools import ToolValidationError
 
 
-def dispatch(request, tools):
-    """Minimal JSON-RPC scaffold, not a complete MCP transport implementation."""
-    if not isinstance(request, dict):
-        return error(None, -32600, "Invalid Request")
-    request_id = request.get("id")
-    method = request.get("method")
-    if request.get("jsonrpc") != "2.0" or not isinstance(method, str):
-        return error(request_id, -32600, "Invalid Request")
-    params = request.get("params", {})
-    if not isinstance(params, dict):
-        return error(request_id, -32602, "Invalid params")
-    if "id" not in request:
-        return None
-    if method == "initialize":
-        result = {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {"tools": {}},
-            "serverInfo": {"name": "steslicer-ai-scaffold", "version": "0.1.0"}
-        }
-    elif method == "tools/list":
-        result = {"tools": tools.list_tools()}
-    elif method == "tools/call":
-        name = params.get("name")
-        arguments = params.get("arguments", {})
-        if not isinstance(name, str) or not isinstance(arguments, dict):
-            return error(request_id, -32602, "Invalid tool name or arguments")
-        try:
-            value = tools.call(name, arguments)
-            result = {"content": [{"type": "text", "text": json.dumps(value)}],
-                      "isError": isinstance(value, dict) and value.get("ok") is False}
-        except UnknownToolError:
-            return error(request_id, -32602, "Unknown tool")
-        except ValueError as exc:
-            return error(request_id, -32602, str(exc))
-    else:
-        return error(request_id, -32601, "Method not found")
-    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+class MCPHandler(object):
+    def __init__(self, registry):
+        self._registry = registry
+
+    def handle_request(self, payload):
+        if not isinstance(payload, dict) or payload.get("jsonrpc") != "2.0":
+            return self._error(None, -32600, "Invalid Request")
+
+        req_id = payload.get("id")
+        method = payload.get("method", "")
+        params = payload.get("params") or {}
+
+        if method == "notifications/initialized":
+            return None
+
+        if method == "initialize":
+            return self._result(req_id, {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": "steslicer-ai-assistant-mcp", "version": "1.0.0"}
+            })
+
+        if method == "ping":
+            return self._result(req_id, {})
+
+        if method == "tools/list":
+            return self._result(req_id, {"tools": self._registry.list_tools()})
+
+        if method == "tools/call":
+            if not isinstance(params, dict):
+                return self._error(req_id, -32602, "Invalid params")
+            name = params.get("name")
+            arguments = params.get("arguments")
+            if arguments is None:
+                arguments = {}
+            try:
+                outcome = self._registry.call(name, arguments)
+            except ToolValidationError as e:
+                return self._error(req_id, -32602, str(e))
+
+            is_err = not bool(outcome.get("ok"))
+            return self._result(req_id, {
+                "content": [{"type": "text", "text": json.dumps(outcome, ensure_ascii=False)}],
+                "isError": is_err
+            })
+
+        return self._error(req_id, -32601, "Method not found: %s" % method)
+
+    def _result(self, req_id, result_obj):
+        return {"jsonrpc": "2.0", "id": req_id, "result": result_obj}
+
+    def _error(self, req_id, code, message):
+        return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}

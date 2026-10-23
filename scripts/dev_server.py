@@ -1,23 +1,35 @@
-"""Run the scaffold without importing STE Slicer or Qt."""
+# -*- coding: utf-8 -*-
 import os
 import sys
+import time
+import webbrowser
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "plugin"))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PLUGIN_PARENT = os.path.join(ROOT_DIR, "plugin")
+if PLUGIN_PARENT not in sys.path:
+    sys.path.insert(0, PLUGIN_PARENT)
 
-from AIAssistant.agent.service import AgentService
-from AIAssistant.server import create_server
+from AIAssistant.AIAssistant import AIAssistant
 
 
 def main():
-    server = create_server(AgentService())
-    print("Scaffold: http://127.0.0.1:%d/" % server.server_port, flush=True)
+    port_arg = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
+    assistant = AIAssistant()
+    port = assistant.startServer(host="127.0.0.1", port=port_arg)
+    url = "http://127.0.0.1:%d/" % port
+    print("AI Assistant запущен: %s" % url)
+    print("MCP JSON-RPC endpoint: %smcp" % url)
+    print("Нажмите Ctrl+C для остановки.")
+    if "--no-browser" not in sys.argv:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
     try:
-        server.serve_forever()
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+        print("\nСервер остановлен.")
 
 
 if __name__ == "__main__":
