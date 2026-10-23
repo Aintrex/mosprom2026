@@ -87,39 +87,37 @@ class ToolRegistry(object):
     def list_tools(self):
         return copy.deepcopy(self._tools)
 
-    def call(self, name, arguments):
-        if name == "assistant_status":
+    def validate(self, name, arguments):
+        if name in ("assistant_status", "get_slicer_state"):
             if not isinstance(arguments, dict) or arguments:
-                raise ValueError("assistant_status takes no arguments")
+                raise ValueError("%s takes no arguments" % name)
+        elif name in TOOL_FIELDS:
+            validate_profile_arguments(name, arguments)
+        elif name in MODEL_FIELDS:
+            validate_model_arguments(name, arguments)
+        elif name in SLICE_FIELDS:
+            validate_slice_arguments(name, arguments)
+        elif name in EXPORT_FIELDS:
+            validate_export_arguments(name, arguments)
+        elif name == "set_print_mode":
+            validate_mode_arguments(arguments)
+        elif name == "describe_settings":
+            validate_setting_arguments(arguments, describe=True)
+        elif name in ("get_setting", "set_setting"):
+            validate_setting_arguments(arguments, write=(name == "set_setting"))
+        else:
+            raise UnknownToolError(name)
+
+    @staticmethod
+    def is_mutating(name):
+        return name in ("set_setting", "set_print_mode", "select_profile", "select_material", "load_model",
+                        "start_slicing", "export_gcode", "save_project_3mf")
+
+    def call(self, name, arguments):
+        self.validate(name, arguments)
+        if name == "assistant_status":
             return {"mode": "scaffold", "llm_connected": False,
                     "slicer_tools_implemented": [tool["name"] for tool in self._tools if tool["name"] != "assistant_status"],
                     "slicer_settings_scope": {"keys": list(SETTING_KEYS), "scopes": ["global", "extruder"]},
                     "runtime_verified": False}
-        if name in TOOL_FIELDS:
-            validate_profile_arguments(name, arguments)
-            return getattr(self._adapter, name)(**arguments)
-        if name in MODEL_FIELDS:
-            validate_model_arguments(name, arguments)
-            return getattr(self._adapter, name)(**arguments)
-        if name in SLICE_FIELDS:
-            validate_slice_arguments(name, arguments)
-            return getattr(self._adapter, name)(**arguments)
-        if name in EXPORT_FIELDS:
-            validate_export_arguments(name, arguments)
-            return getattr(self._adapter, name)(**arguments)
-        if name == "get_slicer_state":
-            if not isinstance(arguments, dict) or arguments:
-                raise ValueError("get_slicer_state takes no arguments")
-            return self._adapter.get_slicer_state()
-        if name == "set_print_mode":
-            validate_mode_arguments(arguments)
-            return self._adapter.set_print_mode(**arguments)
-        if name == "describe_settings":
-            validate_setting_arguments(arguments, describe=True)
-            return self._adapter.describe_settings(**arguments)
-        if name not in ("get_setting", "set_setting"):
-            raise UnknownToolError(name)
-        validate_setting_arguments(arguments, write=(name == "set_setting"))
-        if name == "get_setting":
-            return self._adapter.get_setting(**arguments)
-        return self._adapter.set_setting(**arguments)
+        return getattr(self._adapter, name)(**arguments)

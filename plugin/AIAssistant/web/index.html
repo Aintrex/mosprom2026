@@ -1,25 +1,58 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>STE Slicer · AI Assistant</title>
+  <meta charset="UTF-8">
+  <title>STE Slicer AI Assistant</title>
   <link rel="stylesheet" href="/style.css">
-  <script src="/app.js" defer></script>
 </head>
 <body>
-  <main>
-    <header><span class="eyebrow">STE SLICER / HACKATHON 2026</span><h1>AI Assistant</h1>
-      <p>Подготовка 3D/5D-печати через диалог</p></header>
-    <p class="notice">Каркас: LLM, вложения и управление слайсером ещё не подключены.</p>
-    <section id="messages" aria-label="История диалога" aria-live="polite"></section>
-    <form id="chat-form">
-      <label for="message">Задача печати</label>
-      <textarea id="message" rows="3" maxlength="12000" placeholder="Кронштейн под нагрузку, PETG, без поддержек" required></textarea>
-      <div class="actions"><span>STL / OBJ / 3MF / JPG / PNG — следующий этап</span><button id="send" type="submit">Отправить</button></div>
-      <p id="status" role="status">Готов к проверке соединения</p>
-    </form>
-    <details><summary>Инструменты и слайсинг</summary><pre id="tools">Слайсер не подключён. Результатов печати пока нет.</pre></details>
-  </main>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <h1>STE Slicer AI</h1>
+        <span id="status-badge" class="badge">Проверка...</span>
+      </div>
+
+      <section class="card">
+        <h2>Состояние среды</h2>
+        <div class="kv"><span>Принтер:</span><strong id="st-printer">—</strong></div>
+        <div class="kv"><span>Режим:</span><strong id="st-mode">—</strong></div>
+        <p>Настройки, качество и материалы можно запросить в чате.</p>
+        <p id="slice-state">Снимков нарезки ещё нет.</p>
+      </section>
+
+      <section class="card">
+        <h2>Настройки LLM</h2>
+        <p>URL, модель и ключ задаются в меню STE Slicer: <strong>AI Assistant → LLM Settings</strong>.</p>
+        <p id="cfg-state">Настройки ещё не прочитаны.</p>
+      </section>
+
+      <section class="card">
+        <h2>Быстрые проверки</h2>
+        <button class="chip" data-prompt="Прочитай текущую высоту слоя layer_height.">Прочитать layer_height</button>
+        <button class="chip" data-prompt="Установи высоту слоя layer_height равной 0.12 мм и подтверди изменение.">Установить слой 0.12 мм</button>
+        <button class="chip" data-prompt="Прочитай состояние машины и фактический backend через get_slicer_state.">Состояние STE Slicer</button>
+        <button class="chip" data-prompt="Что ты умеешь и какие инструменты тебе доступны?">Что умеешь?</button>
+      </section>
+    </aside>
+
+    <main class="chat-panel">
+      <header class="chat-header">
+        <div>
+          <strong>Диалог с ИИ-технологом</strong>
+          <span id="agent-state-text" class="sub">Ожидание запроса</span>
+        </div>
+        <button id="btn-new-session" class="btn">Новый диалог</button>
+      </header>
+
+      <div id="messages" class="messages"></div>
+
+      <form id="chat-form" class="chat-input-bar">
+        <textarea id="chat-input" rows="2" maxlength="12000" placeholder="Например: прочитай высоту слоя или состояние STE Slicer..."></textarea>
+        <button type="submit" id="btn-send" class="btn primary">Отправить</button>
+      </form>
+    </main>
+  </div>
+  <script src="/app.js"></script>
 </body>
 </html>
