@@ -6,6 +6,8 @@
 
 Интеграция моделей из [ТЗ 04](tasks/TASK_04_MODEL_LOADING.md) реализована для прямого MCP, см. раздел 2; ручная приёмка новых методов ещё не проводилась. HTTP-upload этим заданием не добавлен, приёмка ТЗ 03 остаётся отдельным открытым пунктом.
 
+Инструменты classic-нарезки [ТЗ 05](tasks/TASK_05_REAL_3D_SLICING.md) также реализованы для прямого MCP и ожидают ручной проверки в STE Slicer. REST-события прогресса, экспорт и 5D-нарезка этим заданием не добавлены.
+
 ## 1. Общие правила
 
 - Базовый адрес — origin открытого чата: `http://127.0.0.1:<port>`. Порт выбирается при запуске, не фиксировать `50998` или другой номер в коде.
@@ -38,8 +40,9 @@
 `initialize`, `tools/list`, `tools/call`. Авторитетный список схем — ответ `tools/list`, формируемый общим реестром `agent/tools.py`.
 
 - `assistant_status`, аргументы `{}`: диагностирует объём реализации; не подтверждает реальный runtime.
-- `get_setting`, аргументы `{"key":"layer_height","scope":"global"}`.
-- `set_setting`, аргументы `{"key":"layer_height","scope":"global","value":0.24}`.
+- `get_setting`, аргументы `{"key":"layer_height","scope":"global"}` либо `{"key":"material_print_temperature","scope":"extruder","extruder_id":"0"}`.
+- `set_setting`, те же key/scope/extruder_id и обязательное value; прежний вызов `{"key":"layer_height","scope":"global","value":0.24}` сохранён.
+- `describe_settings`, аргументы `{"scope":"global"}` либо `{"scope":"extruder","extruder_id":"0"}`: allowlist с фактическими значениями/метаданными текущего стека.
 - `get_slicer_state`, аргументы `{}`: состояние приложения, активной машины, режима и backend.
 - `set_print_mode`, аргументы `{"mode":"classic"}`: разрешены только `classic`, `cylindrical`, `cylindrical_full`; подтверждает настройку и выбранный backend. Вызывать на пустой сцене, без активной нарезки.
 - `list_quality_profiles`, аргументы `{}`: все встроенные QualityGroup текущей конфигурации, включая недоступные.
@@ -49,8 +52,14 @@
 - `load_model`, аргументы `{"path":"C:/Models/bracket.stl"}`: локальный mesh-импорт STL/OBJ/3MF с подтверждением завершения и новых объектов.
 - `list_models`, аргументы `{}`: верхние модели текущей сцены с непрозрачными ID и мировыми границами.
 - `get_model_bounds`, аргументы `{"object_id":"model-1"}`: актуальные мировые границы живой модели.
+- `start_slicing`, аргументы `{}`: короткий запуск штатной classic-нарезки, возвращает идентификатор для polling.
+- `get_slicing_status`, аргументы `{"slice_id":"slice-1"}`: состояние, прогресс и актуальность выбранного запуска.
+- `get_slicing_result`, аргументы `{"slice_id":"slice-1"}`: время/материал только завершённого актуального запуска.
+- `export_gcode`, аргументы `{"slice_id":"slice-1"}`: запуск штатного GCodeWriter из mesh-handler.
+- `save_project_3mf`, аргументы `{"slice_id":"slice-1"}`: запуск 3MFWriter из workspace-handler, сохранение проекта.
+- `get_export_status`, аргументы `{"export_id":"export-..."}`: статус записи и готовый локальный артефакт.
 
-У новых инструментов лишние поля запрещены. `set_setting` остаётся ограниченным `layer_height`, передавать ему `printing_mode` нельзя. ТЗ 02 принято после 45 автоматических проверок и реального прогона в STE Slicer 7.10.12 на Hybrid 530 V5.2.4: диагностика, три режима, backend, UI и восстановление подтверждены. Это не проверка слайсинга или экспорта.
+У новых инструментов лишние поля запрещены. ТЗ 07 расширяет get/set_setting на 19 ключей ниже; передавать `printing_mode` по-прежнему нельзя. ТЗ 02 принято после 45 автоматических проверок и реального прогона в STE Slicer 7.10.12 на Hybrid 530 V5.2.4: диагностика, три режима, backend, UI и восстановление подтверждены. Это не проверка слайсинга, экспорта или новых настроек ТЗ 07.
 
 Инструменты ТЗ 03 реализованы и проверены с подменами; их runtime-приёмка ещё не проводилась. ID — непустые строки; `extruder_id` — ключ позиции из `global_stack.extruders` (например, `"0"`), а не подпись кнопки UI и не числовое значение. UI-экструдер ради операций не переключается. Названия не заменяют ID.
 
@@ -86,7 +95,42 @@
 
 Операционная ошибка инструментов слайсера находится в JSON-тексте `content`: `{"ok":false,"error":{"code":"slicer_not_connected","message":"..."}}`, MCP выставляет `isError:true`. Неверные аргументы/неизвестный инструмент — JSON-RPC `error.code=-32602`, не операционный успех. Коды операций ТЗ 01: `slicer_not_connected`, `no_active_machine`, `setting_unavailable`, `setting_out_of_range`, `qt_timeout`, `setting_not_applied`, `slicer_error`. ТЗ 02 дополнительно использует `mode_unavailable`, `backend_unavailable`, `mode_not_applied`, `backend_not_switched`, `switch_in_progress`. ТЗ 03: `extruder_not_found`, `profile_not_available`, `material_not_available`, `custom_profile_active`, `user_changes_present`, `selection_not_applied`, `selection_busy`. Неизвестный синтаксически корректный ID — операционная ошибка до записи. Внутренняя ошибка API не выдаётся за Unknown tool.
 
-У `assistant_status` сейчас отдельный диагностический формат без обёртки `ok/data`. Не считать все ответы MCP одинаковыми. Он перечисляет одиннадцать реализованных инструментов слайсера, но сохраняет `llm_connected=false` и `runtime_verified=false`; прошлый прогон не подтверждает новый код. В dev-сервере все одиннадцать инструментов слайсера отвечают `slicer_not_connected`. ТЗ 01 принято в STE Slicer 7.10.12 на Hybrid 530 V5.2.4, 3D; чтение, изменение и восстановление layer_height подтверждены API/UI. Это не делает доступными целевые REST-маршруты ниже.
+У `assistant_status` сейчас отдельный диагностический формат без обёртки `ok/data`. Не считать все ответы MCP одинаковыми. Он перечисляет реализованные инструменты слайсера и allowlist/области настроек, но сохраняет `llm_connected=false` и `runtime_verified=false`; прошлый прогон не подтверждает новый код. В dev-сервере операции с приложением отвечают `slicer_not_connected`. ТЗ 01 принято в STE Slicer 7.10.12 на Hybrid 530 V5.2.4, 3D; чтение, изменение и восстановление layer_height подтверждены API/UI. Это не делает доступными целевые REST-маршруты ниже.
+
+### Настройки ТЗ 07 — реализованы, runtime-приёмка открыта
+
+| Тип для ранней валидации | Allowlist |
+| --- | --- |
+| float | layer_height, layer_height_0, line_width, top_bottom_thickness, infill_sparse_density, support_angle, material_print_temperature, material_bed_temperature, speed_print, retraction_amount, retraction_speed, cool_fan_speed |
+| int | wall_line_count |
+| bool | support_enable, retraction_enable, cool_fan_enabled |
+| enum | infill_pattern, support_type, adhesion_type |
+
+Таблица подтверждена definitions форка и ограничивает синтаксис запроса; она не обещает поддержку текущей машиной. Нужны реальное наличие ключа и совпадающий runtime type. Машина/сопло, start/end G-code, printing_mode, произвольные ключи, строки-выражения и batch setter не допускаются. Режим меняется только set_print_mode.
+
+Schemas get/set: обязательные key/scope и для setter value; key — enum allowlist, scope — global/extruder, extruder_id — необязательная в JSON-schema строка minLength:1, value — number/boolean/string, additionalProperties:false. Общий валидатор требует extruder_id **только** для extruder, запрещает его для global и проверяет тип конкретного ключа. Describe имеет обязательный scope и такое же правило extruder_id. Неверная структура, bool вместо числа, дробный int, NaN/inf, числовая строка и неподдержанный ключ — -32602 до API. Целое 3.0 допускается для int и нормализуется в 3 без округления дроби. Только layer_height сохраняет раннее >0; нулевое заполнение может быть допустимо.
+
+extruder_id — точный строковый ключ global_stack.extruders, без смены UI-позиции и подстановки активного экструдера. Неизвестная позиция — extruder_not_found. Глобальный стек и userChanges целевого стека читаются на Qt. Единицы, options, enabled, settable_globally/settable_per_extruder и четыре bounds берутся из вычисленных runtime-свойств, readonly — из userChanges.getReadOnly. Enum принимает ключ актуального options, не подпись. Неподтверждённые тип/разрешение/enabled/readonly запрещают запись; отключённые и readonly настройки можно читать.
+
+Обычные get/set возвращают прежние key/scope/unit/value либо before/after, для extruder добавляется extruder_id. Пример setter data:
+
+```json
+{"key":"material_print_temperature","scope":"extruder","extruder_id":"0","unit":"°C","before":205.0,"after":210.0}
+```
+
+Describe data имеет `{scope,extruder_id?,settings:[...]}` ровно для allowlist, включая недоступные ключи. Иллюстративный элемент:
+
+```json
+{"key":"speed_print","available":true,"type":"float","value":50.0,"unit":"mm/s","enabled":true,"settable":true,"options":{},"settable_globally":true,"settable_per_extruder":true,"read_only":false,"minimum_value":0.0,"maximum_value":null,"minimum_value_warning":10.0,"maximum_value_warning":150.0,"limitations":[]}
+```
+
+available означает наличие value в стеке, settable — разрешение выбранной области с учётом userChanges/readonly; enabled/type проверяются отдельно. Неизвестные поля и непригодное значение — null с limitations, не собственная догадка. Пустая строка unit допустима как runtime-единица без размерности. Отсутствующая граница — null; нечисловая/неконечная граница помечается limitation. Неизвестное enum options или значение вне них не выдаётся за подтверждённое value.
+
+Запись идёт только в userChanges целевого стека. Hard bounds запрещают выход, несогласованные/невычисленные hard bounds дают slicer_error. Warning bounds не запрещают запись: при выходе setter добавляет warnings, как и при недоступных необязательных метаданных. Ни одна температура не является командой нагрева. Зависимые значения могут пересчитаться штатно; сохранение всех derived values не обещается.
+
+Before/after читаются из стека и нормализуются по runtime-типу; запрос не подставляется вместо after. Смена машины/целевого стека/userChanges или отсутствие подтверждения — ошибка. Подтверждённый no-op не вызывает setter и не инвалидирует slice. Реальная попытка изменения, включая неопределённый setter, инвалидирует прежнюю нарезку/будущий экспорт; автоматического отката/повтора нет. Прежний общий lock охватывает импорт/нарезку/экспорт/выбор профиля; записи получают slicing_busy, чтения доступны. QtBridge сохраняет обычный бюджет 5 секунд и отмену просроченного pending callback; после running timeout нужны чтение/UI до дальнейших изменений.
+
+Дополнительные операционные коды: setting_metadata_unavailable, setting_option_unavailable, setting_disabled, setting_read_only, setting_scope_unavailable, setting_context_changed. Сохранены setting_unavailable/setting_out_of_range/setting_not_applied, extruder_not_found/no_active_machine, slicing_busy/qt_timeout/slicer_error/slicer_not_connected. Полные проверки и ограничения: [отчёт ТЗ 07](reports/TASK_07_REPORT.md).
 
 ### Локальные модели — ТЗ 04, runtime-приёмка открыта
 
@@ -111,6 +155,91 @@
 Общий бюджет ожидания импорта — **10 секунд**; короткие вызовы используют оставшийся бюджет, ожидание только в worker. До запуска просроченный callback отменяется. После запуска timeout не отменяет native job: он может добавить модели позднее. Общая блокировка загрузки/режима/качества/материала остаётся до собственного fileCompleted или shutdown; списки и диагностика доступны. Если завершение не приходит, требуется перезапуск плагина/приложения. Ошибка readLocalFile после потенциального запуска также сохраняет этот контекст до подтверждённого завершения. Автоповтора, удаления и фиктивного отката нет.
 
 Новые операционные коды: `invalid_model_path`, `unsupported_model_file`, `invalid_model_file`, `model_file_unavailable`, `model_not_found`, `model_bounds_unavailable`, `model_preview_active`, `model_load_busy`, `model_load_failed`, `model_scene_changed`, `model_load_timeout`. Сохранены `slicer_not_connected`, `no_active_machine`, `qt_timeout`, `slicer_error`; конкурирующие прежние setters возвращают свои busy-коды. При неопределённости требуется list_models. Подписки снимаются на Qt-потоке после подтверждённого завершения, ошибки подготовки или shutdown; незавершённый потенциально запущенный job сохраняет минимальный контекст для позднего завершения.
+
+### Classic-нарезка ТЗ 05 — реализована, runtime-приёмка открыта
+
+Схемы трёх методов имеют `type:object`, `additionalProperties:false`. У `start_slicing` — `properties:{}`, `required:[]`; у двух методов чтения единственное обязательное поле `slice_id` с `type:string,minLength:1`. Неверные типы/лишние поля — JSON-RPC `-32602`, без API-вызова. Без приложения — `slicer_not_connected`. Общая оболочка остаётся `{ok:true,data:...}` / `{ok:false,error:{code,message}}` внутри MCP content; операционные ошибки имеют `isError:true`.
+
+Успешный start возвращает форму статуса с `queued` либо `running`. Это принятие команды, не завершение engine. Если backend отказал синхронно, start возвращает операционную ошибку с slice_id в сообщении. Последующее состояние `failed` само по себе является успешным чтением статуса; причина находится в `data.error`.
+
+```json
+{"slice_id":"slice-1","state":"running","progress":0.42,"printing_mode":"classic","backend_id":"CuraEngineBackend","build_plate":0,"valid":false,"error":null}
+```
+
+`state`: `queued/running/completed/failed`. `progress` — последнее конечное значение backend в диапазоне 0..1 либо null до его получения, без своей интерполяции. `valid:true` означает актуальный completed-результат. ID непрозрачен и действует в текущей сессии плагина. В памяти хранится текущий запуск и последний completed; старые ID могут исчезать. Неизвестный ID не заменяется последним.
+
+```json
+{"slice_id":"slice-1","printing_mode":"classic","backend_id":"CuraEngineBackend","build_plate":0,"print_time_seconds":3723,"material":{"length_mm":1270.0,"weight_g":3.6},"source":"ste_slicer","warnings":[]}
+```
+
+Числа выше иллюстративны. Время берётся через `int(PrintInformation.currentPrintTime)` в секундах; длина — сумма `materialLengths` в метрах, переведённая в мм; вес — сумма `materialWeights` в граммах. Позиции экструдера спискам не приписываются. Округление длины в STE до 0.01 м сохраняется; точность выше источника не обещается. Это прогноз слайсера, не измерение физической печати. Недоступное/неконечное значение — null и пояснение в `warnings`; подтверждённый ноль разрешён. Собственных формул времени/расхода и генерации G-code нет.
+
+До forceSlice проверяются classic и идентичность runtime-backend, активная машина, одна непустая активная платформа, отсутствие G-code preview, импорта и подготовки/обработки слоёв. При включённом `general/auto_slice` требуется выключить его вручную в UI. Плагин не меняет Preferences. Ручной параллельный запуск/редактирование не поддерживаются; обнаруженный конфликт не считается нашим успехом.
+
+Подписки устанавливаются до forceSlice на Qt. Завершение требует начала (`slicingStarted/Processing`), собственного `Done`, отдельного Qt-callback после финализации, свободного backend, неизменного контекста, свежего G-code и собственных оценок платформы с последующим обновлением всех трёх полей PrintInformation. Начальный `NotStarted`, один progress=1, старый буфер/время и чужой Done недостаточны. Учтена штатная замена пустых списков в GenerateBasementJob/первом GCodeLayer; непустой захваченный буфер другим списком не подменяется. Оценка другого зарегистрированного backend той же платформы — конфликт.
+
+Таймер наблюдения на Qt — 250 мс, бюджет принятого запуска — **180 секунд**, без блокирующего ожидания на Qt/HTTP. После `slicing_timeout`, отмены или ошибки поздний Done не меняет failed на completed. Общая защита остаётся до наблюдаемого освобождения `_slicing/_start_slice_job/_generate_basement_job/_process_layers_job`; собственных вызовов Stop/kill/retry нет. Если поля не освобождаются, нужен ручной Stop/ожидание либо перезапуск приложения. Эти приватные поля и `_start_slice_job_build_plate` читаются только в slicing.py, не изменяются плагином.
+
+Защита использует прежний общий lock адаптера. Пока запуск выполняется (включая неопределённый выход после ошибки), `start_slicing`/`set_setting` получают `slicing_busy`; режим, качество/материал и импорт сохраняют прежние `switch_in_progress`, `selection_busy`, `model_load_busy`. Чтения доступны. Изменения печатных mesh/мировых трансформаций, raw-параметров и ID контейнеров глобального/экструдерных/объектных стеков, режима, машины/backend/сцены/платформы делают результат stale. Камера, выделение и служебные узлы слоёв в снимок не входят. Возврат исходной настройки не восстанавливает valid — нужна новая нарезка.
+
+| Код | Значение |
+| --- | --- |
+| `empty_scene` | Нет печатной модели |
+| `unsupported_slicing_mode` | Не classic или backend не совпадает с classic |
+| `slicing_busy` | Конкурирующая операция/занятый backend |
+| `auto_slicing_enabled` | Нужно выключить автоматическую нарезку в UI |
+| `multiple_build_plates` | Непустая платформа не одна активная |
+| `slicing_preview_active` | В сцене импортированный G-code preview |
+| `slice_not_found` | Нет такого ID в памяти |
+| `slice_not_ready` | Запуск ещё не completed либо завершился failed |
+| `slice_result_stale` | Completed относится к прежнему контексту |
+| `slicing_failed` | Реальный отказ подготовки/engine/API либо запуск не подтверждён; детали в журнале |
+| `slicing_timeout` | Истекли 180 секунд, engine автоматически не отменён |
+| `slicing_cancelled` | Отмена backend/пользователем |
+| `slicing_context_changed` | Печатный контекст изменён во время запуска |
+| `slicing_conflict` | Повторный старт, чужое задание/платформа или оценки другого backend |
+
+Также сохраняются `no_active_machine`, `qt_timeout`, `slicer_not_connected`, `slicer_error`. При shutdown собственные сигналы/таймер снимаются через Qt, отложенные callbacks становятся неактивны, ссылки/свой lock освобождаются; чужой engine не завершается. Из-за отсутствия engine request ID неотличимые ручные операции с тем же backend/платформой запрещены для этого прототипа. Подробности и пределы проверки: [отчёт ТЗ 05](reports/TASK_05_REPORT.md).
+
+### Штатный экспорт ТЗ 06 — реализован, runtime-приёмка открыта
+
+Каждый метод имеет ровно одно обязательное поле из списка выше: `type:string,minLength:1`, схема `type:object,additionalProperties:false`. Произвольный output_path не принимается. Неверные аргументы — JSON-RPC -32602 до API; без app — slicer_not_connected. Прежние envelope/isError сохранены; failed-статус читается успешно, причина в data.error. Неизвестный ID не заменяется последним.
+
+Оба запуска требуют актуальный completed slice_id в classic из единственного контекста ТЗ 05. Старый/неуспешный ID и занятые engine/слои/общий lock отклоняются до writer. Проверяется также readonly LocalFileOutputDevice._writing. Ручная параллельная запись/редактирование не поддерживаются; OutputDeviceManager.writeStarted фиксирует конфликт.
+
+```json
+{"export_id":"export-example","slice_id":"slice-1","kind":"gcode","state":"queued","progress":null,"error":null,"artifact":null,"local_directory":null,"valid":false}
+```
+
+Start возвращает queued, не ждёт writer. Состояния queued/running/completed/failed. progress — Job.progress 0..100, переведённый в 0..1, либо null (штатный writer может не давать прогресс). Один job.start/процент не подтверждает готовность. Иллюстративный completed:
+
+```json
+{"export_id":"export-example","slice_id":"slice-1","kind":"project","state":"completed","progress":null,"error":null,"artifact":{"artifact_id":"artifact-example","file_name":"project.3mf","kind":"project","size_bytes":12345,"slice_id":"slice-1","source":"ste_slicer","writer_id":"3MFWriter","writer_type":"workspace_writer"},"local_directory":"<cache>/AIAssistant/exports/export-random","valid":true}
+```
+
+Для G-code — result.gcode, kind=gcode, writer_id=GCodeWriter, writer_type=mesh_writer. ID непрозрачны, не пути. Реестр в памяти содержит только созданные нами проверенные файлы; после перезапуска ID не восстанавливаются. local_directory — диагностический путь прямого MCP; будущий download API должен работать по зарегистрированному artifact_id. Новых файловых HTTP-маршрутов нет. Кэш может очищаться приложением, нужные результаты копируются пользователем.
+
+Поиск writer, узлы, создание/запуск WriteFileJob, getResult/getError и проверки контекста — на Qt. Открытие/flush/close/проверка/публикация файлов — в отдельном stdlib I/O worker без app-вызовов. Штатный job входит в writer на worker приложения: WorkspaceWriter переносит тело write на Qt, GCodeWriter переносит thumbnail, остальные чтения выполняет по своему встроенному механизму. Декораторы/дистрибутив не меняются; синхронного writer.write внутри QtBridge нет.
+
+Файлы создаются эксклюзивно в уникальной папке Resources.getCacheStoragePath()/AIAssistant/exports/: writing.tmp, затем проверенный result.gcode/project.3mf. Существующие файлы не перезаписываются/не удаляются. completed требует своего finished, положительного getResult без getError, успешных flush/close, непустого проверенного файла и повторной проверки актуальности нарезки на Qt перед регистрацией артефакта. Весь native write и финализация используют общий lock ТЗ 05; чтения доступны.
+
+G-code проверяется на точное включение engine-данных своей платформы и команды движения с учётом дополнительных заголовков/настроек writer. Проект — ZIP/CRC, model с resources/build/mesh и непустые ожидаемые SteSlicer/ файлы машины, экструдеров, контейнеров, preferences/version. Mesh-only 3MF недостаточен. Это не заменяет native Preview и **повторное открытие как проекта** с проверкой профилей/материалов/overrides/геометрии. Передаются живые верхние root-модели/группы активной платформы без изменения child transforms. Непечатные wrapper-родители/служебные потомки внутри группы пока отклоняются export_scene_unsupported.
+
+Бюджет **120 секунд**, QTimer 100 мс, polling клиента раз в секунду. Timeout/смена контекста дают failed без публикации. До native finished stream не закрывается, lock не освобождается; поздний finished только очищает контекст. Если call_on_qt_thread завис после исключения (в форке Event.set не в finally), нужен перезапуск без автоповтора. После confirmed finished 3MF сбрасывается setStoreArchive(False), archive закрывается в I/O worker. При чужом активном UI writer его archive не трогается, нужен ручной контроль.
+
+Shutdown прекращает публикацию/таймер и освобождает защиту закрываемого адаптера; для ещё пишущего job сохраняется минимальный finished-callback до выхода, затем закрывается stream и убирается временный файл. Если Qt уже не доставляет finished, очистку до выхода процесса гарантировать нельзя. Готовые файлы остаются историческими. После изменения сцены completed-файл сохраняет прежний slice_id, но статус valid=false; изменение во время записи даёт export_result_stale без артефакта.
+
+| Код | Значение |
+| --- | --- |
+| export_busy / export_not_found | Занята операция или неизвестный export_id |
+| export_writer_unavailable | Нет writer требуемого handler/type |
+| export_workspace_unavailable / export_scene_unsupported | Неподдерживаемые имена контейнеров / иерархия для штатной записи |
+| export_failed | Отказ native writer/job/API |
+| export_io_error / export_invalid_file | Ошибка диска/закрытия либо пустые/неполные/повреждённые данные |
+| export_timeout | 120 секунд, writer не отменён |
+| export_result_stale / export_conflict | Изменение контекста/чужая операция либо ручная параллельная запись |
+
+Preflight сохраняет slice_not_found/slice_not_ready/slice_result_stale; общие slicer_not_connected/qt_timeout/slicer_error и старые busy-коды остальных setters не меняются. Проверки и границы: [отчёт ТЗ 06](reports/TASK_06_REPORT.md).
 
 Основному чату SPA не нужно самостоятельно отправлять операции MCP. Для UI действия агента придут как события целевого REST API. `/mcp` остаётся общей границей инструментов и средством диагностики.
 

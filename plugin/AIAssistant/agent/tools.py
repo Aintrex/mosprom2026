@@ -4,6 +4,9 @@ from ..slicer.adapter import SlicerAdapter, validate_setting_arguments
 from ..slicer.modes import PRINT_MODES, validate_mode_arguments
 from ..slicer.profiles import TOOL_FIELDS, validate_profile_arguments
 from ..slicer.models import MODEL_FIELDS, validate_model_arguments
+from ..slicer.slicing import SLICE_FIELDS, validate_slice_arguments
+from ..slicer.exports import EXPORT_FIELDS, validate_export_arguments
+from ..slicer.settings import SETTING_KEYS
 
 
 class UnknownToolError(Exception):
@@ -20,13 +23,14 @@ class ToolRegistry(object):
             "description": "Read implementation status; does not inspect the slicer.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}
         }]
-        for name, description in (("get_setting", "Прочитать реальный глобальный layer_height (мм)."),
-                                  ("set_setting", "Изменить глобальный layer_height (мм) и подтвердить чтением.")):
-            properties = {"key": {"type": "string", "enum": ["layer_height"]},
-                          "scope": {"type": "string", "enum": ["global"]}}
+        for name, description in (("get_setting", "Прочитать allowlist-настройку глобального или явно указанного экструдерного стека."),
+                                  ("set_setting", "Изменить одну allowlist-настройку целевого userChanges и подтвердить чтением.")):
+            properties = {"key": {"type": "string", "enum": list(SETTING_KEYS)},
+                          "scope": {"type": "string", "enum": ["global", "extruder"]},
+                          "extruder_id": {"type": "string", "minLength": 1}}
             required = ["key", "scope"]
             if name == "set_setting":
-                properties["value"] = {"type": "number", "exclusiveMinimum": 0}
+                properties["value"] = {"type": ["number", "boolean", "string"]}
                 required.append("value")
             self._tools.append({"name": name, "description": description,
                                 "inputSchema": {"type": "object", "properties": properties,
@@ -58,6 +62,28 @@ class ToolRegistry(object):
                 "type": "object", "properties": {field: {"type": "string", "minLength": 1} for field in fields},
                 "required": list(fields), "additionalProperties": False}})
 
+        for name, description in (("start_slicing", "Запустить штатную classic-нарезку; ответ не означает завершения."),
+                                  ("get_slicing_status", "Состояние, реальный прогресс и актуальность запуска по slice_id."),
+                                  ("get_slicing_result", "Подтверждённые время и расход STE Slicer для актуального завершённого запуска.")):
+            fields = SLICE_FIELDS[name]
+            self._tools.append({"name": name, "description": description, "inputSchema": {
+                "type": "object", "properties": {field: {"type": "string", "minLength": 1} for field in fields},
+                "required": list(fields), "additionalProperties": False}})
+
+        for name, description in (("export_gcode", "Запустить штатную запись G-code актуальной нарезки; читать get_export_status."),
+                                  ("save_project_3mf", "Запустить сохранение workspace-проекта 3MF актуальной нарезки."),
+                                  ("get_export_status", "Состояние записи и подтверждённый локальный артефакт по export_id.")):
+            field = EXPORT_FIELDS[name]
+            self._tools.append({"name": name, "description": description, "inputSchema": {
+                "type": "object", "properties": {field: {"type": "string", "minLength": 1}},
+                "required": [field], "additionalProperties": False}})
+
+        self._tools.append({"name": "describe_settings", "description": "Allowlist текущего стека: реальные значения, типы/options, единицы и ограничения записи.",
+                            "inputSchema": {"type": "object", "properties": {
+                                "scope": {"type": "string", "enum": ["global", "extruder"]},
+                                "extruder_id": {"type": "string", "minLength": 1}},
+                                "required": ["scope"], "additionalProperties": False}})
+
     def list_tools(self):
         return copy.deepcopy(self._tools)
 
@@ -67,13 +93,19 @@ class ToolRegistry(object):
                 raise ValueError("assistant_status takes no arguments")
             return {"mode": "scaffold", "llm_connected": False,
                     "slicer_tools_implemented": [tool["name"] for tool in self._tools if tool["name"] != "assistant_status"],
-                    "slicer_settings_scope": {"key": "layer_height", "scope": "global"},
+                    "slicer_settings_scope": {"keys": list(SETTING_KEYS), "scopes": ["global", "extruder"]},
                     "runtime_verified": False}
         if name in TOOL_FIELDS:
             validate_profile_arguments(name, arguments)
             return getattr(self._adapter, name)(**arguments)
         if name in MODEL_FIELDS:
             validate_model_arguments(name, arguments)
+            return getattr(self._adapter, name)(**arguments)
+        if name in SLICE_FIELDS:
+            validate_slice_arguments(name, arguments)
+            return getattr(self._adapter, name)(**arguments)
+        if name in EXPORT_FIELDS:
+            validate_export_arguments(name, arguments)
             return getattr(self._adapter, name)(**arguments)
         if name == "get_slicer_state":
             if not isinstance(arguments, dict) or arguments:
@@ -82,6 +114,9 @@ class ToolRegistry(object):
         if name == "set_print_mode":
             validate_mode_arguments(arguments)
             return self._adapter.set_print_mode(**arguments)
+        if name == "describe_settings":
+            validate_setting_arguments(arguments, describe=True)
+            return self._adapter.describe_settings(**arguments)
         if name not in ("get_setting", "set_setting"):
             raise UnknownToolError(name)
         validate_setting_arguments(arguments, write=(name == "set_setting"))

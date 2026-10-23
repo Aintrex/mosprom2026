@@ -44,12 +44,18 @@ class Stack(object):
         self.check_thread()
         if self.failure is not None:
             raise self.failure
-        return self.supported
+        return self.supported and key == "layer_height"
 
     def getProperty(self, key, prop):
         self.check_thread()
         return {"value": self.value, "minimum_value": self.minimum,
-                "maximum_value": self.maximum}[prop]
+                "maximum_value": self.maximum, "minimum_value_warning": None, "maximum_value_warning": None,
+                "type": "float", "unit": "mm", "enabled": True, "settable_globally": True,
+                "settable_per_extruder": False, "options": {}}[prop]
+
+    def getReadOnly(self):
+        self.check_thread()
+        return False
 
     @property
     def userChanges(self):
@@ -160,7 +166,7 @@ class SettingsTests(unittest.TestCase):
     def test_invalid_arguments_are_protocol_errors_before_scheduling(self):
         valid = {"key": "layer_height", "scope": "global", "value": 0.24}
         cases = [{}, {"key": "layer_height"}, dict(valid, scope="extruder"),
-                 dict(valid, key="speed_print"), dict(valid, extra=1)]
+                 dict(valid, key="machine_start_gcode"), dict(valid, extra=1)]
         for value in (True, False, "0.2", None, float("nan"), float("inf"),
                       -float("inf"), 0, -0.2, 10 ** 1000):
             cases.append(dict(valid, value=value))
@@ -182,7 +188,7 @@ class SettingsTests(unittest.TestCase):
         for value in (0.12, 0.3):
             self.assertTrue(self.adapter.set_setting("layer_height", "global", value)["ok"])
 
-    def test_absent_bounds_allowed_and_warning_properties_not_queried(self):
+    def test_absent_hard_bounds_do_not_prevent_write(self):
         self.app.stack.minimum = None
         self.assertTrue(self.adapter.set_setting("layer_height", "global", 0.02)["ok"])
 
@@ -273,10 +279,10 @@ class SettingsTests(unittest.TestCase):
     def test_registry_and_protocol(self):
         tools = self.dispatch({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]
         self.assertEqual(tools, self.tools.list_tools())
-        self.assertEqual([t["name"] for t in tools], ["assistant_status", "get_setting", "set_setting", "get_slicer_state", "set_print_mode", "list_quality_profiles", "list_materials", "select_profile", "select_material", "load_model", "list_models", "get_model_bounds"])
+        self.assertEqual([t["name"] for t in tools], ["assistant_status", "get_setting", "set_setting", "get_slicer_state", "set_print_mode", "list_quality_profiles", "list_materials", "select_profile", "select_material", "load_model", "list_models", "get_model_bounds", "start_slicing", "get_slicing_status", "get_slicing_result", "export_gcode", "save_project_3mf", "get_export_status", "describe_settings"])
         schema = tools[2]["inputSchema"]
         self.assertEqual(set(schema["required"]), {"key", "scope", "value"})
-        self.assertEqual(schema["properties"]["value"]["exclusiveMinimum"], 0)
+        self.assertEqual(schema["properties"]["value"]["type"], ["number", "boolean", "string"])
         self.assertFalse(schema["additionalProperties"])
         self.assertFalse(self.dispatch(self.rpc())["result"]["isError"])
         self.assertEqual(self.dispatch(self.rpc("unknown", {}))["error"]["message"], "Unknown tool")

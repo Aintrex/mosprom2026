@@ -1,5 +1,4 @@
 import logging
-import math
 import threading
 import time
 import traceback
@@ -9,35 +8,21 @@ from .modes import PRINT_MODES, PrintModeSwitch, get_slicer_state, validate_mode
 from .profiles import (ProfileSelection, MaterialSelection, list_quality_profiles,
                        list_materials, validate_profile_arguments)
 from .models import ModelRegistry, ModelLoad, checked_model_path, validate_model_arguments
+from .slicing import Slicing, validate_slice_arguments
+from .exports import Exports, validate_export_arguments
+from . import settings
+from .settings import validate_setting_arguments, finite as is_finite_number
 
 
 TEST_MACHINE_PROFILE = "Stereotech Hybrid 530 V5.2.4"
 LOGGER = logging.getLogger(__name__)
 
 
-def is_finite_number(value):
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return False
-    try:
-        return math.isfinite(value)
-    except OverflowError:
-        return False
-
-
-def validate_setting_arguments(arguments, write=False):
-    required = {"key", "scope", "value"} if write else {"key", "scope"}
-    if not isinstance(arguments, dict) or set(arguments) != required:
-        raise ValueError("Укажите только обязательные поля: %s" % ", ".join(sorted(required)))
-    if arguments["key"] != "layer_height":
-        raise ValueError("Поддерживается только key=layer_height")
-    if arguments["scope"] != "global":
-        raise ValueError("Поддерживается только scope=global")
-    if write and (not is_finite_number(arguments["value"]) or arguments["value"] <= 0):
-        raise ValueError("value должно быть конечным числом больше нуля (мм)")
+_UNSET = object()
 
 
 class SlicerAdapter(object):
-    def __init__(self, app=None, timeout=5.0, load_timeout=10.0):
+    def __init__(self, app=None, timeout=5.0, load_timeout=10.0, slicing_timeout=180.0, export_timeout=120.0):
         # Constructed by Extension on the Qt thread; dev mode has no app.
         self._bridge = QtBridge(app, timeout) if app is not None else None
         self._timeout = timeout
@@ -45,6 +30,8 @@ class SlicerAdapter(object):
         self._shutdown = threading.Event()
         self._load_timeout = load_timeout
         self._models = ModelRegistry()
+        self._slicing = Slicing(self._change_lock, slicing_timeout)
+        self._exports = Exports(self._slicing, self._change_lock, export_timeout)
 
     def close(self):
         if self._shutdown.is_set():
@@ -52,18 +39,71 @@ class SlicerAdapter(object):
         self._shutdown.set()
         if self._bridge is not None:
             try:
-                self._bridge.run(self._models.close)
+                self._bridge.run(self._close_operations)
             except Exception as exc:
-                LOGGER.error("Model shutdown cleanup: %s", type(exc).__name__)
+                LOGGER.error("Slicer shutdown cleanup: %s", type(exc).__name__)
             self._bridge.close()
 
-    def get_setting(self, key, scope):
-        validate_setting_arguments({"key": key, "scope": scope})
-        return self._run(self._get_setting)
+    def _close_operations(self, app):
+        try:
+            self._exports.close(app)
+        finally:
+            try:
+                self._slicing.close(app)
+            finally:
+                self._models.close(app)
 
-    def set_setting(self, key, scope, value):
-        validate_setting_arguments({"key": key, "scope": scope, "value": value}, write=True)
-        return self._run(lambda app: self._set_setting(app, value), write=True)
+    @staticmethod
+    def _setting_arguments(arguments, extruder_id):
+        if extruder_id is not _UNSET:
+            arguments["extruder_id"] = extruder_id
+        return arguments
+
+    def get_setting(self, key, scope, extruder_id=_UNSET):
+        arguments = self._setting_arguments({"key": key, "scope": scope}, extruder_id)
+        validate_setting_arguments(arguments)
+        return self._run(lambda app: settings.get_setting(app, **arguments))
+
+    def set_setting(self, key, scope, value, extruder_id=_UNSET):
+        arguments = self._setting_arguments({"key": key, "scope": scope, "value": value}, extruder_id)
+        validate_setting_arguments(arguments, write=True)
+        return self._run(lambda bridge: self._write_setting(bridge, arguments), write=True, worker=True)
+
+    def describe_settings(self, scope, extruder_id=_UNSET):
+        arguments = self._setting_arguments({"scope": scope}, extruder_id)
+        validate_setting_arguments(arguments, describe=True)
+        return self._run(lambda app: settings.describe_settings(app, **arguments))
+
+    def _write_setting(self, bridge, arguments):
+        if not self._change_lock.acquire(False):
+            raise SlicerError("slicing_busy", "Занята нарезка, импорт или смена параметров; дождитесь завершения")
+        try:
+            return bridge.run(lambda app: settings.set_setting(app, self._slicing.invalidate, **arguments))
+        finally:
+            self._change_lock.release()
+
+    def start_slicing(self):
+        return self._run(self._slicing.start, write=True)
+
+    def get_slicing_status(self, slice_id):
+        validate_slice_arguments("get_slicing_status", {"slice_id": slice_id})
+        return self._run(lambda app: self._slicing.status(app, slice_id))
+
+    def get_slicing_result(self, slice_id):
+        validate_slice_arguments("get_slicing_result", {"slice_id": slice_id})
+        return self._run(lambda app: self._slicing.result(app, slice_id))
+
+    def export_gcode(self, slice_id):
+        validate_export_arguments("export_gcode", {"slice_id": slice_id})
+        return self._run(lambda app: self._exports.start(app, slice_id, "gcode"), write=True)
+
+    def save_project_3mf(self, slice_id):
+        validate_export_arguments("save_project_3mf", {"slice_id": slice_id})
+        return self._run(lambda app: self._exports.start(app, slice_id, "project"), write=True)
+
+    def get_export_status(self, export_id):
+        validate_export_arguments("get_export_status", {"export_id": export_id})
+        return self._run(lambda app: self._exports.status(app, export_id))
 
     def get_slicer_state(self):
         return self._run(get_slicer_state)
@@ -206,46 +246,3 @@ class SlicerAdapter(object):
             if model_loading:
                 message += " Вызовите list_models. Если job запущен, он может завершиться позже; не повторяйте импорт автоматически."
             return {"ok": False, "error": {"code": "slicer_error", "message": message}}
-
-    @staticmethod
-    def _stack(app):
-        stack = app.getGlobalContainerStack()
-        if stack is None:
-            raise SlicerError("no_active_machine", "В STE Slicer не выбрана активная машина")
-        if not stack.hasProperty("layer_height", "value"):
-            raise SlicerError("setting_unavailable", "Активная машина не поддерживает layer_height")
-        return stack
-
-    @staticmethod
-    def _value(stack):
-        value = stack.getProperty("layer_height", "value")
-        if not is_finite_number(value):
-            raise SlicerError("setting_unavailable", "STE Slicer не вернул числовое значение layer_height")
-        return float(value)
-
-    def _get_setting(self, app):
-        return {"key": "layer_height", "scope": "global",
-                "value": self._value(self._stack(app)), "unit": "mm"}
-
-    def _set_setting(self, app, value):
-        stack = self._stack(app)
-        before = self._value(stack)
-        # getProperty evaluates SettingFunction against the current stack.
-        # Warning bounds intentionally do not prohibit the change.
-        for property_name, is_minimum in (("minimum_value", True), ("maximum_value", False)):
-            bound = stack.getProperty("layer_height", property_name)
-            if bound is None:
-                continue
-            if not is_finite_number(bound):
-                raise SlicerError("slicer_error", "Не удалось прочитать границу layer_height. Проверьте профиль машины.")
-            if (is_minimum and value < bound) or (not is_minimum and value > bound):
-                raise SlicerError("setting_out_of_range", "layer_height не соответствует %s=%s мм активного профиля" % (property_name, bound))
-        changes = stack.userChanges
-        if changes is None:
-            raise SlicerError("setting_unavailable", "Нет контейнера пользовательских настроек активной машины")
-        changes.setProperty("layer_height", "value", value)
-        after = self._value(stack)
-        if not math.isclose(after, value, rel_tol=1e-9, abs_tol=1e-12):
-            raise SlicerError("setting_not_applied", "STE Slicer не подтвердил запрошенное значение. Перечитайте layer_height и проверьте профиль.")
-        return {"key": "layer_height", "scope": "global", "before": before,
-                "after": after, "unit": "mm"}

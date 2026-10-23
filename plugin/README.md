@@ -10,7 +10,7 @@ Python-код должен оставаться совместимым с 3.5. P
 
 ## Реализовано в ТЗ 01
 
-Через существующий `/mcp` доступны `assistant_status`, `get_setting` и `set_setting`. Настройки ограничены обязательными `key=layer_height`, `scope=global`; значение в мм. Остальные настройки, преобразования моделей, слайсинг и экспорт пока не реализованы. Диагностика/режимы добавлены в ТЗ 02, списки и выбор встроенного качества/материалов — в ТЗ 03, импорт/список моделей — в ТЗ 04, см. ниже. Вызовы настроек из HTTP выполняются через `app.callLater`, ожидание результата ограничено 5 секундами. Запись возвращает фактически прочитанные `before` и `after`.
+ТЗ 01 добавило через `/mcp` инструменты `assistant_status`, `get_setting` и `set_setting` для обязательных `key=layer_height`, `scope=global`, значения в мм. Эти вызовы и форма ответов сохранены. ТЗ 07 расширяет настройки на allowlist и явно выбранный экструдер, см. ниже; остальные настройки и преобразования моделей пока не реализованы. Диагностика/режимы добавлены в ТЗ 02, списки и выбор встроенного качества/материалов — в ТЗ 03, импорт/список моделей — в ТЗ 04, classic-нарезка — в ТЗ 05, штатный экспорт — в ТЗ 06. Вызовы настроек из HTTP выполняются через `app.callLater`, ожидание результата ограничено 5 секундами. Запись возвращает фактически прочитанные `before` и `after`.
 
 Аргументы проверяются до обращения к API. Жёсткие границы берутся из текущего стека; предупреждения профиля не запрещают запись. Если запись не подтверждена чтением, возвращается ошибка. MCP помещает результат `{ok,data}` или `{ok,error}` в JSON-текст `content` и выставляет `isError` при операционной ошибке. Неверные аргументы — JSON-RPC `-32602`.
 
@@ -66,7 +66,7 @@ Invoke-Setting 'get_setting' @{key='layer_height'; scope='global'} | ConvertTo-J
 
 ## ТЗ 02: состояние машины и режимы
 
-Добавлены MCP-инструменты `get_slicer_state` с аргументами `{}` и `set_print_mode` с `{"mode":"classic"}`. Допустимы только `classic`, `cylindrical`, `cylindrical_full`; лишние поля отклоняются. Старый `set_setting` по-прежнему ограничен `layer_height`. В dev-режиме оба новых инструмента возвращают `slicer_not_connected`.
+Добавлены MCP-инструменты `get_slicer_state` с аргументами `{}` и `set_print_mode` с `{"mode":"classic"}`. Допустимы только `classic`, `cylindrical`, `cylindrical_full`; лишние поля отклоняются. В ТЗ 02 setter настроек не расширялся; его новый allowlist описан в ТЗ 07 ниже. В dev-режиме оба новых инструмента возвращают `slicer_not_connected`.
 
 Диагностика возвращает версию приложения, ID/имя/definition ID машины, фактическую строку режима, текущий и ожидаемый ID backend. `matches_mode` проверяет совпадение объектов из runtime-менеджера. Неизвестный текущий режим сохраняется в диагностике, но не допускается для установки. Без машины диагностика успешна: `machine`, `printing_mode`, `backend` равны null, `available_modes=[]`. Доступные режимы фильтруются по enum и `machine_five_axis`; `backend_available` означает только наличие регистрации, не готовность движка/лицензии/G-code.
 
@@ -74,7 +74,7 @@ Invoke-Setting 'get_setting' @{key='layer_height'; scope='global'} | ConvertTo-J
 
 **ТЗ 02 принято в STE Slicer 7.10.12, Hybrid 530 V5.2.4.** Диагностика, переходы 3D -> 5D Spiral -> 5D -> 3D, backend CuraEngineBackend/CLIParserBackend/CylindricalBackend, UI, восстановление и отрицательные запросы проверены; всего 45 автоматических проверок. Протокол: `docs/reports/TASK_02_RUNTIME.md`. Флаг `runtime_verified` в assistant_status остаётся false: он не является реестром приёмки конкретной сборки. Ниже — команды воспроизведения.
 
-Ограничение: исследованный общий API Backend предоставляет сигнал состояния, но не публичный getter актуального состояния слайсинга. Защита от переключения во время нарезки не заявляется. Проверять ТЗ 02 только на **пустой сцене**, без запущенной нарезки; профиль качества и материал не менять.
+Ограничение: исследованный общий API Backend предоставляет сигнал состояния, но не публичный getter актуального состояния слайсинга. ТЗ 05 добавляет общую защиту записей во время собственного classic-запуска; это не универсальная защита от ручных параллельных операций. Проверять ТЗ 02 только на **пустой сцене**, без запущенной нарезки; профиль качества и материал не менять.
 
 ### Команды ручной приёмки ТЗ 02
 
@@ -300,6 +300,307 @@ Invoke-ModelRpc 'tools/call' @{name='load_model'; arguments=@{path=123}} | Conve
 ```
 
 Неизвестный ID/неверный файл — операционный отказ, неверный тип — `-32602`; сцена после отказов не должна меняться. При любой ошибке/таймауте остановите сценарий и сначала вызовите list_models, не повторяйте импорт автоматически. После проверки пользователь удаляет **только тестовые объекты** штатным UI, затем list_models/get_model_bounds подтверждают исчезновение их ID и сохранность исходной сцены. Инструмент удаления не реализован. Слайсинг и физическую печать не запускать.
+
+## ТЗ 05: штатная classic-нарезка
+
+Добавлены `start_slicing {}`, `get_slicing_status {slice_id}` и `get_slicing_result {slice_id}`. Все поля ID — непустые строки, лишние аргументы запрещены. В dev без app инструменты возвращают `slicer_not_connected`. Старые инструменты сохранены. **Реализация проверена изолированно, runtime-приёмка ТЗ 03/04/05 открыта.** Установленный плагин в этом задании не обновлялся, engine не запускался.
+
+До запуска проверяются машина, classic и соответствующий backend, одна непустая активная платформа, отсутствие preview/импорта/занятых native jobs и выключенная автоматическая нарезка. Выключать auto-slice нужно вручную в UI; Preferences не меняются. Ручной параллельный запуск и редактирование во время операции не поддерживаются. Все API-вызовы/подписки/таймер идут на Qt через прежний мост; HTTP не ждёт завершения engine.
+
+Ответ start — принятие команды и ID, не завершение. Опрос статуса возвращает `queued/running/completed/failed`, реальный progress 0..1 либо null, mode/backend/платформу, valid и причину failed. Начальный NotStarted, progress=1 и старые G-code/оценки не подтверждают успех. Нужны начало, Done своего backend, отдельная Qt-проверка после финализации, свежий G-code и обновлённая PrintInformation своей платформы. Подтверждённые время, сумма длины и массы читаются из STE, без своих оценочных формул; длина переводится из метров в мм, масса в граммах. Исходное округление длины до 0.01 м сохраняется. Неизвестные данные — null и warnings.
+
+Бюджет — 180 секунд, таймер наблюдения — 250 мс. Timeout/ошибка/отмена UI фиксируют failed; позднее завершение не превращается в completed. Защита записей остаётся до наблюдаемого выхода backend: дождитесь завершения/нажмите Stop в UI, при зависшем состоянии перезапустите приложение. Плагин не отменяет engine и не повторяет запуск. Во время защиты доступны чтения, а записи/импорт получают прежние busy-коды; для set_setting/start — slicing_busy.
+
+После изменения печатного контекста `valid=false`, результат возвращает `slice_result_stale`; восстановление исходных настроек не делает старую нарезку актуальной. Камера/выделение и служебные узлы Preview сами по себе результат не портят. Поля и все коды ошибок: `docs/API_CONTRACT.md`; реализация и ограничения: `docs/reports/TASK_05_REPORT.md`. Экспорт 3MF/G-code, 5D-нарезка и события REST в этот объём не входят.
+
+### Команды ручной приёмки ТЗ 05
+
+Эти команды **подготовлены, но не выполнялись в установленном слайсере**. Ведущий после ревью координирует обновление всего плагина. Сначала сохраните проект, затем после согласованного обновления/перезапуска выберите **Stereotech Hybrid 530 V5.2.4**, **classic/3D**, вручную выключите автоматическую нарезку. Нужна одна активная платформа без G-code preview. Для однозначного теста очистите тестовую сцену штатным UI после сохранения проекта; не удаляйте рабочие модели без сохранения. Приёмка качества/материалов ТЗ 03 остаётся отдельной.
+
+Откройте чат и в новом PowerShell выполните блок диагностики с текущим портом:
+
+```powershell
+$slicePort = [int](Read-Host 'Порт из адреса открытого чата')
+$sliceMcpUrl = 'http://127.0.0.1:{0}/mcp' -f $slicePort
+function Invoke-SliceRpc($method, $params) {
+    $body = @{jsonrpc='2.0'; id=5; method=$method; params=$params} | ConvertTo-Json -Depth 25 -Compress
+    Invoke-RestMethod -Uri $sliceMcpUrl -Method Post -ContentType 'application/json' -TimeoutSec 15 -Body $body
+}
+function Invoke-SliceTool($name, $arguments) {
+    $response = Invoke-SliceRpc 'tools/call' @{name=$name; arguments=$arguments}
+    if ($null -ne $response.error) { throw ($response.error | ConvertTo-Json -Compress) }
+    $envelope = $response.result.content[0].text | ConvertFrom-Json
+    if ($response.result.isError -or -not $envelope.ok) { throw ($envelope | ConvertTo-Json -Depth 25 -Compress) }
+    $envelope.data
+}
+Invoke-SliceRpc 'initialize' @{} | ConvertTo-Json -Depth 25
+Invoke-SliceRpc 'tools/list' @{} | ConvertTo-Json -Depth 25
+$sliceState = Invoke-SliceTool 'get_slicer_state' @{}
+$sliceState | ConvertTo-Json -Depth 25
+if ($null -eq $sliceState.machine -or $sliceState.printing_mode -ne 'classic' -or -not $sliceState.backend.matches_mode) {
+    throw 'Выберите нужную машину и classic в UI; затем повторите диагностику'
+}
+$sliceOriginalHeight = (Invoke-SliceTool 'get_setting' @{key='layer_height'; scope='global'}).value
+Invoke-SliceTool 'list_models' @{} | ConvertTo-Json -Depth 25
+```
+
+Подтвердите реальный импорт ТЗ 04: абсолютный локальный путь к небольшому известному STL без окружающих кавычек, затем list/bounds и сверка детали в UI. При ошибке/timeout сначала list_models и сообщения приложения, без автоматического повторного импорта. Этот прогон STL не закрывает оставшиеся проверки OBJ/3MF и ТЗ 03.
+
+```powershell
+$sliceStlPath = Read-Host 'Абсолютный локальный путь к небольшому известному STL'
+$sliceLoaded = Invoke-SliceTool 'load_model' @{path=$sliceStlPath}
+$sliceLoaded | ConvertTo-Json -Depth 25
+Invoke-SliceTool 'list_models' @{} | ConvertTo-Json -Depth 25
+foreach ($item in $sliceLoaded.objects) {
+    Invoke-SliceTool 'get_model_bounds' @{object_id=$item.object_id} | ConvertTo-Json -Depth 25
+}
+```
+
+После сверки модели/размеров и размещения внутри стола запустите нарезку. Polling раз в секунду, клиентский предел 195 секунд плюс не более одного HTTP timeout; выход по failed немедленный. Клиентский timeout не является отменой backend.
+
+```powershell
+$sliceStart = Invoke-SliceTool 'start_slicing' @{}
+$sliceStart | ConvertTo-Json -Depth 25
+$sliceId = $sliceStart.slice_id
+if ([string]::IsNullOrEmpty($sliceId)) { throw 'Не получен slice_id; проверьте UI, не повторяйте start автоматически' }
+$sliceWatch = [Diagnostics.Stopwatch]::StartNew()
+do {
+    $sliceStatus = Invoke-SliceTool 'get_slicing_status' @{slice_id=$sliceId}
+    $sliceStatus | ConvertTo-Json -Depth 25 -Compress
+    if ($sliceStatus.state -eq 'failed') { throw ($sliceStatus.error | ConvertTo-Json -Depth 25 -Compress) }
+    if ($sliceStatus.state -eq 'completed') { break }
+    if ($sliceWatch.Elapsed.TotalSeconds -ge 195) { throw 'Клиент прекратил polling; проверьте UI/Stop и статус этого ID перед новыми действиями' }
+    Start-Sleep -Seconds 1
+} while ($true)
+if (-not $sliceStatus.valid) { throw 'Результат уже неактуален; проверьте изменения сцены' }
+$sliceResult = Invoke-SliceTool 'get_slicing_result' @{slice_id=$sliceId}
+$sliceResult | ConvertTo-Json -Depth 25
+New-Item -ItemType Directory -Path 'tmp' -Force | Out-Null
+@{state=$sliceState; loaded=$sliceLoaded; start=$sliceStart; status=$sliceStatus; result=$sliceResult} |
+    ConvertTo-Json -Depth 30 | Set-Content -LiteralPath 'tmp/task05_runtime.json' -Encoding UTF8
+```
+
+Сверьте секунды/длину/массу с UI STE Slicer, учитывая округление и формат часов/минут. Откройте штатный **Preview**, убедитесь в наличии слоёв именно этой детали и сохраните скриншоты прогресса, результата и предпросмотра. После обычного просмотра статус должен оставаться valid, если печатный контекст не менялся:
+
+```powershell
+Invoke-SliceTool 'get_slicing_status' @{slice_id=$sliceId} | ConvertTo-Json -Depth 25
+```
+
+Затем проверьте устаревание: введите другое допустимое layer_height (с точкой), проверьте статус/ошибку результата, восстановите исходную высоту. Сначала setter должен успешно завершиться; при его ошибке остановитесь и перечитайте настройку/UI, без автоматического повтора.
+
+```powershell
+$sliceNewHeight = [double]::Parse((Read-Host 'Другая допустимая высота слоя в мм'), [Globalization.CultureInfo]::InvariantCulture)
+if ($sliceNewHeight -eq $sliceOriginalHeight) { throw 'Нужно другое допустимое значение' }
+Invoke-SliceTool 'set_setting' @{key='layer_height'; scope='global'; value=$sliceNewHeight} | ConvertTo-Json
+try {
+    Invoke-SliceTool 'get_slicing_status' @{slice_id=$sliceId} | ConvertTo-Json -Depth 25
+    $sliceStaleRpc = Invoke-SliceRpc 'tools/call' @{name='get_slicing_result'; arguments=@{slice_id=$sliceId}}
+    $sliceStaleRpc | ConvertTo-Json -Depth 25
+    if ($null -ne $sliceStaleRpc.error) { throw 'Ожидалась операционная ошибка, получена JSON-RPC ошибка' }
+    $sliceStale = $sliceStaleRpc.result.content[0].text | ConvertFrom-Json
+    if (-not $sliceStaleRpc.result.isError -or $sliceStale.error.code -ne 'slice_result_stale') { throw 'Устаревание не подтверждено' }
+} finally {
+    Invoke-SliceTool 'set_setting' @{key='layer_height'; scope='global'; value=$sliceOriginalHeight} | ConvertTo-Json
+    Invoke-SliceTool 'get_setting' @{key='layer_height'; scope='global'} | ConvertTo-Json
+}
+Invoke-SliceTool 'get_slicing_status' @{slice_id=$sliceId} | ConvertTo-Json -Depth 25
+```
+
+Подтвердите восстановленную высоту в UI. Старый результат должен остаться valid=false; новый актуальный результат требует нового явного запуска. В протоколе ведущего сохраните реальные ответы, модель/версию и скриншоты. Экспорт, повторное открытие 3MF и физическую печать этот сценарий не выполняет.
+
+## ТЗ 06: штатный экспорт G-code и проекта 3MF
+
+`export_gcode {slice_id}`, `save_project_3mf {slice_id}` запускают штатный WriteFileJob и возвращают export_id/state=queued. `get_export_status {export_id}` читает queued/running/completed/failed, реальный progress либо null и готовый артефакт. Нужен актуальный completed classic slice_id из ТЗ 05. У инструментов только непустые строковые ID, без произвольного output_path; неизвестный ID не заменяется последним. В dev — slicer_not_connected.
+
+G-code записывает GCodeWriter из mesh-handler; проект — ThreeMFWorkspaceWriter из workspace-handler, с машиной/экструдерами/контейнерами/Preferences. Mesh-only 3MF недостаточен. Все наши app/scene вызовы идут на Qt, writer запускается штатным job с worker, файловая подготовка/проверка — вне Qt. Декораторы форка не обходятся. Успех требует finished/result без error, успешных flush/close, проверки непустых данных engine либо ZIP/XML/workspace и повторной проверки slice_id. Во время записи и финализации действует общая защита нарезки/настроек/импорта; чтения доступны. Ручная параллельная запись/редактирование не поддерживаются.
+
+Бюджет — 120 секунд; при timeout writer не отменяется, используемый stream и защита сохраняются до его выхода. Поздний finished не публикует ошибочный экспорт. Если штатный декоратор завис после исключения, потребуется перезапуск без автоповтора. Ошибка 3MF после подтверждённого выхода сбрасывает storeArchive; чужой ещё работающий writer не трогается. Подробности: `docs/API_CONTRACT.md`, `docs/reports/TASK_06_REPORT.md`.
+
+Готовые файлы лежат в кэше STE, `AIAssistant/exports/export-<случайная папка>/result.gcode` или `project.3mf`. Точный **local_directory** возвращается только после completed; artifact сообщает ID, имя, kind, размер, slice_id и штатный источник. Каждый запуск создаёт новую папку без перезаписи. Нужные результаты скопируйте, поскольку это кэш. Регистрация ID действует в памяти до перезапуска; HTTP-скачивание пока отсутствует. После изменения проекта исторический файл остаётся связан с прежним slice_id, статус valid=false.
+
+**Native-экспорт, Preview и повторное открытие 3MF ещё не проверены. Установленный плагин не обновлялся.** Файлы fake-тестов не являются результатами STE Slicer, в results/ они не создаются. Ручная приёмка ТЗ 03/04/05/06 открыта.
+
+### PowerShell для приёмки ТЗ 06
+
+После ревью ведущий координирует обновление всего плагина. Пройдите ТЗ 05 выше на небольшом известном STL: Hybrid 530 V5.2.4, classic, auto-slice выключен, одна платформа. Нужен completed/valid=true slice_id **этой сессии плагина**. Если проверяли stale сменой высоты, сначала нужна новая явная нарезка. Не открывайте импортированный G-code до завершения **обоих** экспортов: он изменит исходную сцену.
+
+```powershell
+$exportPort = [int](Read-Host 'Текущий порт из адреса чата')
+$exportMcpUrl = 'http://127.0.0.1:{0}/mcp' -f $exportPort
+function Invoke-ExportRpc($method, $params) {
+    $body = @{jsonrpc='2.0'; id=6; method=$method; params=$params} | ConvertTo-Json -Depth 25 -Compress
+    Invoke-RestMethod -Uri $exportMcpUrl -Method Post -ContentType 'application/json' -TimeoutSec 15 -Body $body
+}
+function Invoke-ExportTool($name, $arguments) {
+    $response = Invoke-ExportRpc 'tools/call' @{name=$name; arguments=$arguments}
+    if ($null -ne $response.error) { throw ($response.error | ConvertTo-Json -Compress) }
+    $envelope = $response.result.content[0].text | ConvertFrom-Json
+    if ($response.result.isError -or -not $envelope.ok) { throw ($envelope | ConvertTo-Json -Depth 25 -Compress) }
+    $envelope.data
+}
+function Wait-LocalExport($exportId) {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        $status = Invoke-ExportTool 'get_export_status' @{export_id=$exportId}
+        $status | ConvertTo-Json -Depth 25 -Compress | Write-Host
+        if ($status.state -eq 'failed') { throw ($status.error | ConvertTo-Json -Compress) }
+        if ($status.state -eq 'completed') {
+            if (-not $status.valid -or $null -eq $status.artifact) { throw 'Нет актуального подтверждённого артефакта' }
+            return $status
+        }
+        if ($watch.Elapsed.TotalSeconds -ge 135) { throw 'Клиентский timeout; writer не отменён. Проверьте этот ID/UI, без автоматического повтора' }
+        Start-Sleep -Seconds 1
+    } while ($true)
+}
+Invoke-ExportRpc 'tools/list' @{} | ConvertTo-Json -Depth 25
+$exportSliceId = Read-Host 'slice_id завершённой актуальной нарезки ТЗ 05'
+Invoke-ExportTool 'get_slicing_result' @{slice_id=$exportSliceId} | ConvertTo-Json -Depth 25
+$exportBaseline = @{
+    state = Invoke-ExportTool 'get_slicer_state' @{}
+    models = Invoke-ExportTool 'list_models' @{}
+    quality = Invoke-ExportTool 'list_quality_profiles' @{}
+    material0 = Invoke-ExportTool 'list_materials' @{extruder_id='0'}
+    material1 = Invoke-ExportTool 'list_materials' @{extruder_id='1'}
+    layer = Invoke-ExportTool 'get_setting' @{key='layer_height'; scope='global'}
+}
+New-Item -ItemType Directory -Path 'tmp' -Force | Out-Null
+$exportBaseline | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath 'tmp/task06_before.json' -Encoding UTF8
+$exportBaseline | ConvertTo-Json -Depth 30
+```
+
+Сверьте baseline с UI; отдельно зафиксируйте overrides/ориентацию/размеры. Выполните записи последовательно, затем скопируйте в **новую несуществующую** пользовательскую папку. Никакого пути LLM-инструменту не передаётся; Copy-Item выполняет сам пользователь.
+
+```powershell
+$gcodeStart = Invoke-ExportTool 'export_gcode' @{slice_id=$exportSliceId}
+$gcodeExport = Wait-LocalExport $gcodeStart.export_id
+$projectStart = Invoke-ExportTool 'save_project_3mf' @{slice_id=$exportSliceId}
+$projectExport = Wait-LocalExport $projectStart.export_id
+@{gcode=$gcodeExport; project=$projectExport} | ConvertTo-Json -Depth 30 |
+    Set-Content -LiteralPath 'tmp/task06_exports.json' -Encoding UTF8
+$gcodeSource = Join-Path $gcodeExport.local_directory $gcodeExport.artifact.file_name
+$projectSource = Join-Path $projectExport.local_directory $projectExport.artifact.file_name
+if ((Get-Item -LiteralPath $gcodeSource).Length -ne $gcodeExport.artifact.size_bytes -or
+    (Get-Item -LiteralPath $projectSource).Length -ne $projectExport.artifact.size_bytes) { throw 'Размеры файлов не совпали' }
+$exportCopyDir = Read-Host 'Абсолютный путь к новой несуществующей папке для копий результатов'
+New-Item -ItemType Directory -Path $exportCopyDir -ErrorAction Stop | Out-Null
+$gcodeCopy = Join-Path $exportCopyDir 'result.gcode'
+$projectCopy = Join-Path $exportCopyDir 'project.3mf'
+Copy-Item -LiteralPath $gcodeSource -Destination $gcodeCopy -ErrorAction Stop
+Copy-Item -LiteralPath $projectSource -Destination $projectCopy -ErrorAction Stop
+Get-Item -LiteralPath $gcodeCopy, $projectCopy | Select-Object FullName, Length
+```
+
+Сохраните текущую работу перед открытием файлов. Штатным UI откройте G-code в Preview и проверьте слои/траектории именно этой детали, режим и оценки. Затем через UI откройте project.3mf **как проект**, не через load_model: сравните машину/classic, материалы обоих экструдеров, качество/overrides, объекты, ориентацию и габариты с baseline/UI. Повторное открытие может менять ID объектов — сравнивается содержимое, не прежние object_id. После полного открытия проекта перечитайте:
+
+```powershell
+Invoke-ExportTool 'get_slicer_state' @{} | ConvertTo-Json -Depth 25
+Invoke-ExportTool 'list_models' @{} | ConvertTo-Json -Depth 25
+Invoke-ExportTool 'list_quality_profiles' @{} | ConvertTo-Json -Depth 25
+Invoke-ExportTool 'list_materials' @{extruder_id='0'} | ConvertTo-Json -Depth 25
+Invoke-ExportTool 'list_materials' @{extruder_id='1'} | ConvertTo-Json -Depth 25
+Invoke-ExportTool 'get_setting' @{key='layer_height'; scope='global'} | ConvertTo-Json
+```
+
+Сохраните реальные JSON-ответы/файлы/скриншоты для ведущего. Физическую печать не запускайте. Открытие файлов меняет исходный slicing-контекст, поэтому исторический экспорт может стать valid=false — это не повторная нарезка и не потеря готового файла. Не выдавайте структурную проверку ZIP за этот native-прогон.
+
+## ТЗ 07: настройки global и явно выбранного экструдера
+
+get/set_setting теперь поддерживают 19 ключей: layer_height, layer_height_0, line_width, wall_line_count, top_bottom_thickness, infill_sparse_density, infill_pattern, support_enable, support_type, support_angle, material_print_temperature, material_bed_temperature, speed_print, retraction_enable, retraction_amount, retraction_speed, cool_fan_enabled, cool_fan_speed, adhesion_type. Режим, машина/сопло, start/end G-code и произвольные ключи сюда не входят. Batch setter отсутствует.
+
+Обязательны key/scope, для set ещё value. При `scope=extruder` обязателен строковый extruder_id из runtime-позиций, например `"0"`; при global extruder_id запрещён. UI-экструдер не меняется и не подставляется. `describe_settings {scope,extruder_id?}` возвращает allowlist с actual type/value/unit/options, enabled, разрешениями записи и hard/warning bounds. Отсутствующие/невычисленные поля — null/limitations, а не собственные defaults. Разрешение записи зависит от фактической машины/стека; наличие ключа в allowlist не обещает поддержку.
+
+Числа конечные, bool не является числом; int не округляется, числовые строки не принимаются. Bool — только JSON boolean, enum — ключ текущих options, не подпись. Layer_height сохраняет >0, для остальных действуют runtime hard bounds (нулевое заполнение может допускаться). Выход за warning bounds разрешён с warnings. Неизвестные тип/permissions/enabled/readonly и невычисленные hard bounds запрещают запись.
+
+Запись только в userChanges целевого стека, before/after фактически читаются. No-op не пишет и не инвалидирует slice. Попытка изменения делает старую нарезку/будущий экспорт stale, в том числе при неизвестном результате setter; восстановление значения не возвращает valid. Общий guard 05/06 сохранён, чтения доступны. При timeout до старта callback отменяется, после начала — неопределённость: сначала чтение/UI, без автоматического повтора/отката. Зависимые значения могут пересчитаться штатно. Восстановление значения не удаляет созданный override — для сброса override используется штатный UI.
+
+**Код проверен с подменами; ручная приёмка ТЗ 03–07 открыта.** Установленный плагин не обновлён. Изменение температуры в настройках проекта не является командой нагрева/физической печати. Контракт и ошибки: `docs/API_CONTRACT.md`; проверенные свойства и результаты: `docs/reports/TASK_07_REPORT.md`.
+
+### PowerShell для приёмки ТЗ 07
+
+После ревью и согласованного обновления всего плагина выберите **Hybrid 530 V5.2.4**, classic. Дождитесь завершения импорта/нарезки/экспорта; не прерывайте их ради теста. Сохраните текущий проект. Команды выполняйте последовательно из корня репозитория. При любой ошибке остановите сценарий, перечитайте настройку и UI; не повторяйте запись автоматически и не переходите к восстановлению до выяснения состояния.
+
+```powershell
+$printPort = [int](Read-Host 'Текущий порт из адреса чата')
+$printMcpUrl = 'http://127.0.0.1:{0}/mcp' -f $printPort
+function Invoke-PrintRpc($method, $params) {
+    $body = @{jsonrpc='2.0'; id=7; method=$method; params=$params} | ConvertTo-Json -Depth 25 -Compress
+    Invoke-RestMethod -Uri $printMcpUrl -Method Post -ContentType 'application/json' -TimeoutSec 15 -Body $body
+}
+function Invoke-PrintTool($name, $arguments) {
+    $response = Invoke-PrintRpc 'tools/call' @{name=$name; arguments=$arguments}
+    if ($null -ne $response.error) { throw ($response.error | ConvertTo-Json -Compress) }
+    $envelope = $response.result.content[0].text | ConvertFrom-Json
+    if ($response.result.isError -or -not $envelope.ok) { throw ($envelope | ConvertTo-Json -Depth 25 -Compress) }
+    $envelope.data
+}
+$printState = Invoke-PrintTool 'get_slicer_state' @{}
+$printState | ConvertTo-Json -Depth 25
+if ($null -eq $printState.machine -or $printState.machine.name -ne 'Stereotech Hybrid 530 V5.2.4' -or
+    $printState.printing_mode -ne 'classic' -or -not $printState.backend.matches_mode) { throw 'Выберите Stereotech Hybrid 530 V5.2.4 и согласованный classic backend в UI' }
+$printGlobal = Invoke-PrintTool 'describe_settings' @{scope='global'}
+$printExt0 = Invoke-PrintTool 'describe_settings' @{scope='extruder'; extruder_id='0'}
+$printExt1 = Invoke-PrintTool 'describe_settings' @{scope='extruder'; extruder_id='1'}
+foreach ($description in @($printGlobal, $printExt0, $printExt1)) {
+    $description.settings | Format-Table key, type, value, unit, available, enabled, settable
+}
+$printGlobalKey = 'speed_print'
+$printExtKey = 'material_print_temperature'
+$printGlobalMeta = @($printGlobal.settings | Where-Object key -eq $printGlobalKey)[0]
+$printExtMeta = @($printExt0.settings | Where-Object key -eq $printExtKey)[0]
+foreach ($item in @($printGlobalMeta, $printExtMeta)) {
+    if ($null -eq $item -or -not $item.available -or -not $item.enabled -or -not $item.settable -or $item.type -ne 'float') {
+        throw 'Выбранный параметр не подтверждён для записи. Изучите describe_settings; не включайте зависимости автоматически'
+    }
+    $item | ConvertTo-Json -Depth 25
+}
+$printOriginalGlobal = Invoke-PrintTool 'get_setting' @{key=$printGlobalKey; scope='global'}
+$printOriginal0 = Invoke-PrintTool 'get_setting' @{key=$printExtKey; scope='extruder'; extruder_id='0'}
+$printOriginal1 = Invoke-PrintTool 'get_setting' @{key=$printExtKey; scope='extruder'; extruder_id='1'}
+New-Item -ItemType Directory -Path 'tmp' -Force | Out-Null
+@{state=$printState; global=$printGlobal; ext0=$printExt0; ext1=$printExt1; originalGlobal=$printOriginalGlobal; original0=$printOriginal0; original1=$printOriginal1} |
+    ConvertTo-Json -Depth 30 | Set-Content -LiteralPath 'tmp/task07_before.json' -Encoding UTF8
+$printNewGlobal = [double]::Parse((Read-Host 'Другая допустимая speed_print в runtime unit, с точкой'), [Globalization.CultureInfo]::InvariantCulture)
+$printNew0 = [double]::Parse((Read-Host 'Другая допустимая material_print_temperature экструдера 0 в runtime unit, с точкой'), [Globalization.CultureInfo]::InvariantCulture)
+if ($printNewGlobal -eq $printOriginalGlobal.value -or $printNew0 -eq $printOriginal0.value) { throw 'Нужны другие допустимые значения' }
+```
+
+Если температура недоступна из-за зависимостей/профиля, отметьте этот пункт как непроверенный либо отдельно выберите подтверждённый per-extruder параметр и сохраните его baseline. Не меняйте профиль/зависимости автоматически. Сверьте исходные значения и активную UI-позицию. Сначала global:
+
+```powershell
+Invoke-PrintTool 'set_setting' @{key=$printGlobalKey; scope='global'; value=$printNewGlobal} | ConvertTo-Json -Depth 20
+$printAfterGlobal = Invoke-PrintTool 'get_setting' @{key=$printGlobalKey; scope='global'}
+$printAfterGlobal | ConvertTo-Json
+```
+
+Сверьте after с UI, затем отдельно измените экструдер 0. Снимок второго экструдера снимается непосредственно перед этим изменением: global-настройки могли штатно повлиять на derived values.
+
+```powershell
+$printOtherBefore = Invoke-PrintTool 'get_setting' @{key=$printExtKey; scope='extruder'; extruder_id='1'}
+Invoke-PrintTool 'set_setting' @{key=$printExtKey; scope='extruder'; extruder_id='0'; value=$printNew0} | ConvertTo-Json -Depth 20
+$printAfter0 = Invoke-PrintTool 'get_setting' @{key=$printExtKey; scope='extruder'; extruder_id='0'}
+$printAfter1 = Invoke-PrintTool 'get_setting' @{key=$printExtKey; scope='extruder'; extruder_id='1'}
+@{global=$printAfterGlobal; ext0=$printAfter0; ext1=$printAfter1} | ConvertTo-Json -Depth 25 |
+    Set-Content -LiteralPath 'tmp/task07_after.json' -Encoding UTF8
+$printAfter0, $printAfter1 | ConvertTo-Json -Depth 20
+if ($printAfter1.value -ne $printOtherBefore.value) { throw 'Значение другого экструдера изменилось; сначала выясните причину в UI' }
+```
+
+Подтвердите в UI нужный стек/значение и отсутствие автоматического переключения UI-экструдера инструментом. Ручное переключение вкладок для сверки допустимо. После успешной проверки явно восстановите оба исходных значения и проверьте API/UI:
+
+```powershell
+Invoke-PrintTool 'set_setting' @{key=$printExtKey; scope='extruder'; extruder_id='0'; value=$printOriginal0.value} | ConvertTo-Json -Depth 20
+Invoke-PrintTool 'set_setting' @{key=$printGlobalKey; scope='global'; value=$printOriginalGlobal.value} | ConvertTo-Json -Depth 20
+$printRestoredGlobal = Invoke-PrintTool 'get_setting' @{key=$printGlobalKey; scope='global'}
+$printRestored0 = Invoke-PrintTool 'get_setting' @{key=$printExtKey; scope='extruder'; extruder_id='0'}
+$printRestored1 = Invoke-PrintTool 'get_setting' @{key=$printExtKey; scope='extruder'; extruder_id='1'}
+@{global=$printRestoredGlobal; ext0=$printRestored0; ext1=$printRestored1} | ConvertTo-Json -Depth 25 |
+    Set-Content -LiteralPath 'tmp/task07_restored.json' -Encoding UTF8
+$printRestoredGlobal, $printRestored0, $printRestored1 | ConvertTo-Json -Depth 20
+if ($printRestoredGlobal.value -ne $printOriginalGlobal.value -or $printRestored0.value -ne $printOriginal0.value -or
+    $printRestored1.value -ne $printOriginal1.value) { throw 'Исходные значения не подтверждены; проверьте UI и сохранённый baseline' }
+```
+
+Сохраните реальные ответы и скриншоты до/после/восстановления для ведущего. Не объявляйте этот сценарий пройденным по тестам с подменами. Старую нарезку после изменения/восстановления повторно актуальной не считать; нужен новый явный start.
 
 ## Настройка LLM: предстоит реализовать
 
