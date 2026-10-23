@@ -1,0 +1,36 @@
+# Local research, downloaded distributions and credentials
+/tmp/
+/vendor/
+/data/
+/dist/
+.env
+.env.*
+!.env.example
+*.local.json
+*license*.reg
+
+# Python and editors
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db
+
+# Large inputs: keep organizer models outside Git
+*.mp4
+*.wav
+*.zip
+*.exe
+*.stl
+*.obj
+*.3mf
+*.gcode
+
+# Final deliverables may be tracked deliberately
+!results/**/*.3mf
+!results/**/*.gcode

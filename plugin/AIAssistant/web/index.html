@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>STE Slicer · AI Assistant</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><span class="eyebrow">STE SLICER / HACKATHON 2026</span><h1>AI Assistant</h1>
+      <p>Подготовка 3D/5D-печати через диалог</p></header>
+    <p class="notice">Каркас: LLM, вложения и управление слайсером ещё не подключены.</p>
+    <section id="messages" aria-label="История диалога" aria-live="polite"></section>
+    <form id="chat-form">
+      <label for="message">Задача печати</label>
+      <textarea id="message" rows="3" maxlength="12000" placeholder="Кронштейн под нагрузку, PETG, без поддержек" required></textarea>
+      <div class="actions"><span>STL / OBJ / 3MF / JPG / PNG — следующий этап</span><button id="send" type="submit">Отправить</button></div>
+      <p id="status" role="status">Готов к проверке соединения</p>
+    </form>
+    <details><summary>Инструменты и слайсинг</summary><pre id="tools">Слайсер не подключён. Результатов печати пока нет.</pre></details>
+  </main>
+</body>
+</html>
