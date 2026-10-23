@@ -3,6 +3,7 @@ import copy
 from ..slicer.adapter import SlicerAdapter, validate_setting_arguments
 from ..slicer.modes import PRINT_MODES, validate_mode_arguments
 from ..slicer.profiles import TOOL_FIELDS, validate_profile_arguments
+from ..slicer.models import MODEL_FIELDS, validate_model_arguments
 
 
 class UnknownToolError(Exception):
@@ -49,6 +50,13 @@ class ToolRegistry(object):
             self._tools.append({"name": name, "description": descriptions[name], "inputSchema": {
                 "type": "object", "properties": {field: {"type": "string", "minLength": 1} for field in fields},
                 "required": list(fields), "additionalProperties": False}})
+        for name, description in (("load_model", "Импорт локального STL/OBJ/3MF (до 50 MiB), с подтверждением завершения. Путь — диагностический ввод, не upload API."),
+                                  ("list_models", "Адресуемые верхние модели текущей сцены и мировые границы, Uranium Y-up, мм."),
+                                  ("get_model_bounds", "Актуальные мировые границы живого объекта по непрозрачному ID, мм.")):
+            fields = MODEL_FIELDS[name]
+            self._tools.append({"name": name, "description": description, "inputSchema": {
+                "type": "object", "properties": {field: {"type": "string", "minLength": 1} for field in fields},
+                "required": list(fields), "additionalProperties": False}})
 
     def list_tools(self):
         return copy.deepcopy(self._tools)
@@ -63,6 +71,9 @@ class ToolRegistry(object):
                     "runtime_verified": False}
         if name in TOOL_FIELDS:
             validate_profile_arguments(name, arguments)
+            return getattr(self._adapter, name)(**arguments)
+        if name in MODEL_FIELDS:
+            validate_model_arguments(name, arguments)
             return getattr(self._adapter, name)(**arguments)
         if name == "get_slicer_state":
             if not isinstance(arguments, dict) or arguments:

@@ -379,7 +379,7 @@ class ModeTests(unittest.TestCase):
 
     def test_registry_schema_and_dev_mode(self):
         tools = self.tools.list_tools()
-        self.assertEqual([t["name"] for t in tools], ["assistant_status", "get_setting", "set_setting", "get_slicer_state", "set_print_mode", "list_quality_profiles", "list_materials", "select_profile", "select_material"])
+        self.assertEqual([t["name"] for t in tools], ["assistant_status", "get_setting", "set_setting", "get_slicer_state", "set_print_mode", "list_quality_profiles", "list_materials", "select_profile", "select_material", "load_model", "list_models", "get_model_bounds"])
         self.assertEqual(tools[4]["inputSchema"], {"type": "object", "properties": {
             "mode": {"type": "string", "enum": ["classic", "cylindrical", "cylindrical_full"]}},
             "required": ["mode"], "additionalProperties": False})

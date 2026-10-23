@@ -8,6 +8,7 @@ from .qt_bridge import QtBridge, SlicerError
 from .modes import PRINT_MODES, PrintModeSwitch, get_slicer_state, validate_mode_arguments
 from .profiles import (ProfileSelection, MaterialSelection, list_quality_profiles,
                        list_materials, validate_profile_arguments)
+from .models import ModelRegistry, ModelLoad, checked_model_path, validate_model_arguments
 
 
 TEST_MACHINE_PROFILE = "Stereotech Hybrid 530 V5.2.4"
@@ -36,16 +37,24 @@ def validate_setting_arguments(arguments, write=False):
 
 
 class SlicerAdapter(object):
-    def __init__(self, app=None, timeout=5.0):
+    def __init__(self, app=None, timeout=5.0, load_timeout=10.0):
         # Constructed by Extension on the Qt thread; dev mode has no app.
         self._bridge = QtBridge(app, timeout) if app is not None else None
         self._timeout = timeout
         self._change_lock = threading.Lock()
         self._shutdown = threading.Event()
+        self._load_timeout = load_timeout
+        self._models = ModelRegistry()
 
     def close(self):
+        if self._shutdown.is_set():
+            return
         self._shutdown.set()
         if self._bridge is not None:
+            try:
+                self._bridge.run(self._models.close)
+            except Exception as exc:
+                LOGGER.error("Model shutdown cleanup: %s", type(exc).__name__)
             self._bridge.close()
 
     def get_setting(self, key, scope):
@@ -79,6 +88,42 @@ class SlicerAdapter(object):
         validate_profile_arguments("select_material", {"extruder_id": extruder_id, "root_material_id": root_material_id})
         return self._run(lambda bridge: self._select(bridge, MaterialSelection(extruder_id, root_material_id)),
                          write=True, worker=True, selection=True)
+
+    def list_models(self):
+        return self._run(self._models.list_models)
+
+    def get_model_bounds(self, object_id):
+        validate_model_arguments("get_model_bounds", {"object_id": object_id})
+        return self._run(lambda app: self._models.get_bounds(app, object_id))
+
+    def load_model(self, path):
+        validate_model_arguments("load_model", {"path": path})
+        return self._run(lambda bridge: self._load_model(bridge, path), worker=True, model_loading=True)
+
+    def _load_model(self, bridge, path):
+        bridge.ensure_open()
+        if bridge.is_main_thread():
+            raise SlicerError("slicer_error", "Импорт модели требуется вызывать из HTTP worker. Запуск не выполнен.")
+        path = checked_model_path(path)
+        if not self._change_lock.acquire(False):
+            raise SlicerError("model_load_busy", "Занят импорт, режим или профиль. Незавершённый импорт после timeout требует ожидания; если fileCompleted не придёт, перезапустите плагин/приложение.")
+        operation = ModelLoad(self._models, path, self._change_lock)
+        deadline = time.monotonic() + self._load_timeout
+        try:
+            bridge.run(operation.start, timeout=min(self._timeout, max(0, deadline - time.monotonic())))
+            while True:
+                bridge.ensure_open()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise SlicerError("model_load_timeout", "Импорт запущен, но завершение за 10 секунд не подтверждено. Штатный job не отменён и может добавить модель позже.")
+                result = bridge.run(operation.check, timeout=min(self._timeout, remaining))
+                if result is not None:
+                    return result
+                self._shutdown.wait(min(0.05, max(0, deadline - time.monotonic())))
+        finally:
+            # После запуска блокировку освободит свой fileCompleted или shutdown,
+            # даже если HTTP worker уже вернул timeout/ошибку.
+            operation.abandon()
 
     def _select(self, bridge, operation):
         bridge.ensure_open()
@@ -131,7 +176,7 @@ class SlicerAdapter(object):
         finally:
             self._change_lock.release()
 
-    def _run(self, operation, write=False, worker=False, selection=False):
+    def _run(self, operation, write=False, worker=False, selection=False, model_loading=False):
         try:
             if self._bridge is None:
                 raise SlicerError("slicer_not_connected", "Нет подключения к STE Slicer. Запустите инструмент из плагина.")
@@ -139,6 +184,8 @@ class SlicerAdapter(object):
             return {"ok": True, "data": data}
         except SlicerError as exc:
             message = exc.message
+            if model_loading and exc.code in ("qt_timeout", "model_load_timeout", "model_scene_changed", "model_load_failed", "slicer_error", "slicer_not_connected"):
+                message += " Вызовите list_models; после начатого импорта состояние может измениться позже. Автоматического повтора или удаления нет."
             if selection and exc.code not in ("custom_profile_active", "user_changes_present", "selection_busy", "extruder_not_found", "no_active_machine"):
                 message += " Перечитайте list_quality_profiles, list_materials и get_slicer_state. Если запись началась, состояние могло измениться; автоматического отката/повтора нет."
             if worker and exc.code in ("qt_timeout", "mode_not_applied", "backend_not_switched", "backend_unavailable", "slicer_error"):
@@ -156,6 +203,8 @@ class SlicerAdapter(object):
                             if worker else " Запись могла начаться; перечитайте настройку перед дальнейшими действиями.")
             if selection:
                 message += " Перечитайте list_quality_profiles и list_materials; откат не выполнялся."
+            if model_loading:
+                message += " Вызовите list_models. Если job запущен, он может завершиться позже; не повторяйте импорт автоматически."
             return {"ok": False, "error": {"code": "slicer_error", "message": message}}
 
     @staticmethod

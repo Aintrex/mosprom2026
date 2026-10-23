@@ -10,7 +10,7 @@ Python-код должен оставаться совместимым с 3.5. P
 
 ## Реализовано в ТЗ 01
 
-Через существующий `/mcp` доступны `assistant_status`, `get_setting` и `set_setting`. Настройки ограничены обязательными `key=layer_height`, `scope=global`; значение в мм. Остальные настройки, модели, слайсинг и экспорт пока не реализованы. Диагностика/режимы добавлены в ТЗ 02, списки и выбор встроенного качества/материалов — в ТЗ 03, см. ниже. Вызовы настроек из HTTP выполняются через `app.callLater`, ожидание результата ограничено 5 секундами. Запись возвращает фактически прочитанные `before` и `after`.
+Через существующий `/mcp` доступны `assistant_status`, `get_setting` и `set_setting`. Настройки ограничены обязательными `key=layer_height`, `scope=global`; значение в мм. Остальные настройки, преобразования моделей, слайсинг и экспорт пока не реализованы. Диагностика/режимы добавлены в ТЗ 02, списки и выбор встроенного качества/материалов — в ТЗ 03, импорт/список моделей — в ТЗ 04, см. ниже. Вызовы настроек из HTTP выполняются через `app.callLater`, ожидание результата ограничено 5 секундами. Запись возвращает фактически прочитанные `before` и `after`.
 
 Аргументы проверяются до обращения к API. Жёсткие границы берутся из текущего стека; предупреждения профиля не запрещают запись. Если запись не подтверждена чтением, возвращается ошибка. MCP помещает результат `{ok,data}` или `{ok,error}` в JSON-текст `content` и выставляет `isError` при операционной ошибке. Неверные аргументы — JSON-RPC `-32602`.
 
@@ -209,6 +209,97 @@ Invoke-ProfileTool 'get_slicer_state' @{} | ConvertTo-Json -Depth 15
 Invoke-ProfileRpc 'tools/call' @{name='list_materials'; arguments=@{extruder_id=0}} | ConvertTo-Json -Depth 15
 Invoke-ProfileRpc 'tools/call' @{name='select_profile'; arguments=@{quality_type='__absent_id_for_task03_check__'}} | ConvertTo-Json -Depth 15
 ```
+
+## ТЗ 04: импорт моделей, ID и габариты
+
+Добавлены `load_model {path}`, `list_models {}` и `get_model_bounds {object_id}`. path/object_id — непустые строки, лишние поля запрещены. load_model принимает только абсолютный путь к читаемому обычному локальному STL/OBJ/3MF, **непустому и не больше 50 MiB** (ограничение прототипа). URL, UNC/device/сетевые диски и другие типы отклоняются. Это диагностический MCP-ввод: HTTP-upload и file_id пока отсутствуют, не передавайте LLM произвольный доступ к локальным путям. Файлы проверяются в worker; новый код не возвращает/не логирует полный путь модели. Штатные логи reader могут содержать его.
+
+Импорт запускает штатный readLocalFile с `skip_project_file_check=True`: 3MF импортируется как mesh, без workspace-восстановления проекта. Объектные overrides 3MF могут сохраниться. Штатное размещение и автомасштабирование не отключаются, Preferences не меняются. G-code preview блокирует импорт до запуска, чтобы избежать штатного deleteAll.
+
+Успех требует своего fileLoaded, затем fileCompleted и фактических новых верхних моделей в исходной сцене/машине. Полный путь сопоставляется только внутри контекста. Один ранний сигнал или посторонний узел недостаточны. При обнаруженной смене машины/сцены, исчезновении старых узлов или пустом результате возвращается ошибка. Ручной параллельный импорт/очистка не поддерживаются, в особенности тот же путь без уникального job ID.
+
+Ожидание в worker ограничено общими 10 секундами. После запуска job не отменяется при timeout: модели могут появиться позже. Вызовите list_models, не повторяйте импорт автоматически. Новый импорт и изменения режима/профиля/материала блокируются до собственного завершения или shutdown. Если fileCompleted не пришёл, требуется перезапуск. Ошибка API с неизвестным результатом запуска также сохраняет блокировку. Списки/диагностика доступны. После подтверждённого завершения или shutdown подписки снимаются на Qt-потоке. Прямой синхронный load_model из Qt-потока запрещён.
+
+Список адресует верхние mesh-объекты и группы с печатной геометрией, не дублируя части групп. Служебные root/камера/платформа без печатных декораторов и preview исключаются. Непрозрачный object_id стабилен для живой адресуемой модели в сессии; одинаковые имена имеют разные ID. Удалённый ID недействителен и не переиспользуется. Геометрия берётся из мировых mesh-границ; для группы — объединение потомков без origin пустого родителя.
+
+Ответы bounds используют **Uranium Y-up**: Y — высота, X/Z — плоскость стола, единица mm. Не переставляйте оси при сравнении с UI. Нулевая толщина по одной оси допустима; недоступные границы в списке — null, отдельный get_model_bounds возвращает ошибку. Полные результаты/коды описаны в `docs/API_CONTRACT.md`.
+
+**Реализация проверена с fake reader/сценой и локальным HTTP; реальный импорт ТЗ 04 ещё не проверен.** Установленная копия не обновлялась, приложение не перезапускалось. Ручная приёмка ТЗ 03 также остаётся открыта. Наличие объектов/размеров не подтверждает слайсинг или G-code.
+
+### Команды ручной приёмки ТЗ 04
+
+Ведущий сначала координирует ревью и обновление установленной копии. Завершите приёмку ТЗ 03 либо явно зафиксируйте открытые пункты. Сохраните проект, выберите Hybrid 530 V5.2.4, classic, без нарезки и G-code preview. Для теста нужны небольшой известный STL, OBJ и 3MF; отсутствующий формат отметьте как непроверенный. Не добавляйте модели организаторов в Git.
+
+В PowerShell из корня репозитория:
+
+```powershell
+$port = [int](Read-Host 'Порт из адреса открытого чата')
+$modelsMcpUrl = 'http://127.0.0.1:{0}/mcp' -f $port
+function Invoke-ModelRpc($method, $params) {
+    $body = @{jsonrpc='2.0'; id=4; method=$method; params=$params} | ConvertTo-Json -Depth 20 -Compress
+    Invoke-RestMethod -Uri $modelsMcpUrl -Method Post -ContentType 'application/json' -TimeoutSec 35 -Body $body
+}
+function Invoke-ModelTool($name, $arguments) {
+    $response = Invoke-ModelRpc 'tools/call' @{name=$name; arguments=$arguments}
+    if ($null -ne $response.error) { throw ($response.error | ConvertTo-Json -Compress) }
+    $result = $response.result.content[0].text | ConvertFrom-Json
+    if ($response.result.isError -or -not $result.ok) { throw ($result | ConvertTo-Json -Depth 20 -Compress) }
+    $result.data
+}
+Invoke-ModelRpc 'initialize' @{} | ConvertTo-Json -Depth 20
+Invoke-ModelRpc 'tools/list' @{} | ConvertTo-Json -Depth 20
+$modelsBefore = Invoke-ModelTool 'list_models' @{}
+$stateBeforeModels = Invoke-ModelTool 'get_slicer_state' @{}
+$qualityBeforeModels = Invoke-ModelTool 'list_quality_profiles' @{}
+$material0BeforeModels = Invoke-ModelTool 'list_materials' @{extruder_id='0'}
+$material1BeforeModels = Invoke-ModelTool 'list_materials' @{extruder_id='1'}
+$modelBaseline = @{models=$modelsBefore; state=$stateBeforeModels; quality=$qualityBeforeModels; material0=$material0BeforeModels; material1=$material1BeforeModels}
+$modelBaseline | ConvertTo-Json -Depth 25
+New-Item -ItemType Directory -Path 'tmp' -Force | Out-Null
+$modelBaseline | ConvertTo-Json -Depth 25 | Set-Content -LiteralPath 'tmp/task04_before.json' -Encoding UTF8
+```
+
+Следующие команды выполняйте последовательно, после каждого импорта проверяйте UI. Вводите абсолютный путь без окружающих кавычек. Сначала известный STL:
+
+```powershell
+$stlPath = Read-Host 'Абсолютный локальный путь к небольшому известному STL'
+$stlResult = Invoke-ModelTool 'load_model' @{path=$stlPath}
+$stlResult | ConvertTo-Json -Depth 20
+Invoke-ModelTool 'list_models' @{} | ConvertTo-Json -Depth 20
+foreach ($item in $stlResult.objects) { Invoke-ModelTool 'get_model_bounds' @{object_id=$item.object_id} | ConvertTo-Json -Depth 20 }
+```
+
+Сверьте мировые границы/размеры с известной геометрией и UI, учитывая Y-up и штатный autoscale. Убедитесь, что исходные модели сохранили ID и геометрию. Затем отдельно выполните импорты OBJ и 3MF, каждый раз повторяя list_models/get_model_bounds по ID из ответа:
+
+```powershell
+$objPath = Read-Host 'Абсолютный локальный путь к OBJ'
+$objResult = Invoke-ModelTool 'load_model' @{path=$objPath}
+$objResult | ConvertTo-Json -Depth 20
+foreach ($item in $objResult.objects) { Invoke-ModelTool 'get_model_bounds' @{object_id=$item.object_id} | ConvertTo-Json -Depth 20 }
+$threeMfPath = Read-Host 'Абсолютный локальный путь к 3MF для mesh-импорта'
+$threeMfResult = Invoke-ModelTool 'load_model' @{path=$threeMfPath}
+$threeMfResult | ConvertTo-Json -Depth 20
+foreach ($item in $threeMfResult.objects) { Invoke-ModelTool 'get_model_bounds' @{object_id=$item.object_id} | ConvertTo-Json -Depth 20 }
+Invoke-ModelTool 'list_models' @{} | ConvertTo-Json -Depth 20
+Invoke-ModelTool 'get_slicer_state' @{} | ConvertTo-Json -Depth 20
+Invoke-ModelTool 'list_quality_profiles' @{} | ConvertTo-Json -Depth 20
+Invoke-ModelTool 'list_materials' @{extruder_id='0'} | ConvertTo-Json -Depth 20
+Invoke-ModelTool 'list_materials' @{extruder_id='1'} | ConvertTo-Json -Depth 20
+```
+
+Для 3MF проверьте отсутствие workspace-диалога/замены машины и глобальных профилей, отдельно отметьте object overrides. Зафиксируйте группы/несколько моделей: в списке должна быть верхняя группа без дубликатов частей. Сохраните ответы и UI; реально неизменившиеся глобальные параметры сравните с baseline.
+
+Повторный импорт того же STL должен создать новые объекты с другими ID:
+
+```powershell
+Invoke-ModelTool 'load_model' @{path=$stlPath} | ConvertTo-Json -Depth 20
+Invoke-ModelTool 'list_models' @{} | ConvertTo-Json -Depth 20
+Invoke-ModelRpc 'tools/call' @{name='get_model_bounds'; arguments=@{object_id='__unknown_task04_id__'}} | ConvertTo-Json -Depth 20
+Invoke-ModelRpc 'tools/call' @{name='load_model'; arguments=@{path='C:/__missing_task04__.stl'}} | ConvertTo-Json -Depth 20
+Invoke-ModelRpc 'tools/call' @{name='load_model'; arguments=@{path=123}} | ConvertTo-Json -Depth 20
+```
+
+Неизвестный ID/неверный файл — операционный отказ, неверный тип — `-32602`; сцена после отказов не должна меняться. При любой ошибке/таймауте остановите сценарий и сначала вызовите list_models, не повторяйте импорт автоматически. После проверки пользователь удаляет **только тестовые объекты** штатным UI, затем list_models/get_model_bounds подтверждают исчезновение их ID и сохранность исходной сцены. Инструмент удаления не реализован. Слайсинг и физическую печать не запускать.
 
 ## Настройка LLM: предстоит реализовать
 
