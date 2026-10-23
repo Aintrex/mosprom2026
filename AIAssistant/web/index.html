@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>STE Slicer AI Assistant · Интеллектуальный 3D/5D технолог</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Левая панель: телеметрия STE Slicer и 7 тестовых кейсов хакатона -->
+    <aside class="sidebar">
+      <div class="brand-header">
+        <div class="brand-logo">5D</div>
+        <div>
+          <h1>STE Slicer AI</h1>
+          <span class="subtitle" id="runtimeBadge">Загрузка...</span>
+        </div>
+      </div>
+
+      <!-- Статус принтера и активного режима 3D / 5D -->
+      <section class="panel-card">
+        <div class="card-title">Активный профиль и режим</div>
+        <div class="telemetry-row">
+          <span class="t-label">Принтер:</span>
+          <span class="t-val" id="printerName">Stereotech Hybrid 530 V5.2.4</span>
+        </div>
+        <div class="telemetry-row">
+          <span class="t-label">Режим печати:</span>
+          <span class="mode-badge mode-classic" id="printingModeBadge">3D (classic)</span>
+        </div>
+        <div class="telemetry-row">
+          <span class="t-label">Материал:</span>
+          <span class="t-val highlight" id="activeMaterial">Stereotech Proto (PLA)</span>
+        </div>
+        <div class="telemetry-row">
+          <span class="t-label">Профиль качества:</span>
+          <span class="t-val" id="activeQuality">normal</span>
+        </div>
+      </section>
+
+      <!-- Ключевые настройки слайсера -->
+      <section class="panel-card">
+        <div class="card-title">Ключевые параметры слайсера</div>
+        <div class="settings-grid" id="settingsGrid">
+          <div class="stat-box">
+            <span class="s-name">Высота слоя</span>
+            <span class="s-val" id="setLayerHeight">0.20 мм</span>
+          </div>
+          <div class="stat-box">
+            <span class="s-name">Периметры</span>
+            <span class="s-val" id="setWalls">3 шт.</span>
+          </div>
+          <div class="stat-box">
+            <span class="s-name">Заполнение</span>
+            <span class="s-val" id="setInfill">20% (grid)</span>
+          </div>
+          <div class="stat-box">
+            <span class="s-name">Поддержки</span>
+            <span class="s-val" id="setSupports">Выкл</span>
+          </div>
+          <div class="stat-box">
+            <span class="s-name">Сопло / Стол</span>
+            <span class="s-val" id="setTemps">210° / 60°C</span>
+          </div>
+          <div class="stat-box">
+            <span class="s-name">Скорость / Обдув</span>
+            <span class="s-val" id="setSpeed">50 мм/с</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Модели в сцене и геометрия STL -->
+      <section class="panel-card">
+        <div class="card-title">Сцена и анализ геометрии STL</div>
+        <div id="sceneModelsContainer" class="scene-empty">
+          Модель ещё не загружена в сцену
+        </div>
+      </section>
+
+      <!-- Прогресс слайсинга и выгрузка 3MF / G-code -->
+      <section class="panel-card">
+        <div class="card-title">Слайсинг и экспорт результатов</div>
+        <div class="progress-wrap">
+          <div class="progress-bar" id="sliceProgressBar" style="width: 0%"></div>
+        </div>
+        <div class="slice-stats">
+          <div>
+            <span class="t-label">Статус:</span>
+            <strong id="sliceStatusText">Ожидание</strong>
+          </div>
+          <div>
+            <span class="t-label">Время:</span>
+            <strong id="sliceTimeText">—</strong>
+          </div>
+          <div>
+            <span class="t-label">Расход:</span>
+            <strong id="sliceMaterialText">—</strong>
+          </div>
+        </div>
+        <div class="export-actions">
+          <a href="/api/download?type=3mf" class="btn btn-secondary btn-sm" target="_blank">⬇ Скачать .3MF</a>
+          <a href="/api/download?type=gcode" class="btn btn-secondary btn-sm" target="_blank">⬇ Скачать .GCODE</a>
+        </div>
+        <button id="saveToResultsBtn" class="btn btn-accent btn-full" style="margin-top:8px;">
+          💾 Сохранить в results/&lt;модель&gt;/
+        </button>
+      </section>
+
+      <!-- Быстрая загрузка 7 тестовых кейсов из папки Примеры деталей -->
+      <section class="panel-card cases-card">
+        <div class="card-title">Кейсы хакатона (1 клик: STL + ТЗ + Фото)</div>
+        <div id="presetCasesList" class="preset-list"></div>
+      </section>
+    </aside>
+
+    <!-- Правая часть: окно чат-бота с отображением MCP вызовов -->
+    <main class="chat-main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <h2>ИИ-ассистент технолога STE Slicer</h2>
+          <span class="llm-pill" id="llmModelBadge">dashscope/qwen3.8-flash</span>
+        </div>
+        <div class="topbar-actions">
+          <button id="openMcpInspectorBtn" class="btn btn-outline">🔧 MCP Tools (18)</button>
+          <button id="openSettingsBtn" class="btn btn-primary">⚙ Настройки LLM</button>
+          <button id="clearChatBtn" class="btn btn-outline" title="Очистить историю диалога">🗑 Сброс</button>
+        </div>
+      </header>
+
+      <!-- Лента сообщений -->
+      <div class="chat-messages" id="chatMessages">
+        <div class="message assistant-message">
+          <div class="msg-header">
+            <span class="msg-role">🤖 STE Slicer AI Assistant</span>
+            <span class="msg-meta">Готов к работе · MCP JSON-RPC 2.0 активен</span>
+          </div>
+          <div class="msg-body">
+            <p>Привет! Я интеллектуальный помощник для <strong>STE Slicer (Stereotech Hybrid 530 V5.2.4)</strong>.</p>
+            <p>Вы можете:</p>
+            <ul>
+              <li>Нажать на любой из <strong>7 тестовых кейсов хакатона</strong> в левой панели — я автоматически загружу <code>.STL</code> модель, фотографию детали и полный текст технического задания из <code>.docx</code>, подберу режим (<code>3D classic</code>, <code>5D Spiral cylindrical</code> или <code>5D cylindrical_full</code>), материал, выставлю параметры через MCP-инструменты и запущу слайсинг.</li>
+              <li>Или прикрепить свои файлы <code>.stl / .obj / .3mf</code> и изображения <code>.jpg / .png</code> кнопкой внизу и описать задачу своими словами.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- Панель прикреплённых файлов перед отправкой -->
+      <div class="attachments-bar hidden" id="attachmentsBar"></div>
+
+      <!-- Поле ввода и прикрепления файлов -->
+      <footer class="chat-composer">
+        <div class="composer-tools">
+          <label class="file-btn" title="Прикрепить 3D-модель (STL, OBJ, 3MF)">
+            📦 + 3D модель (STL/3MF)
+            <input type="file" id="modelFileInput" accept=".stl,.STL,.obj,.OBJ,.3mf,.3MF" hidden />
+          </label>
+          <label class="file-btn" title="Прикрепить изображение или фото детали (JPG, PNG)">
+            🖼 + Фото (JPG/PNG)
+            <input type="file" id="imageFileInput" accept="image/jpeg,image/png,image/webp" multiple hidden />
+          </label>
+        </div>
+        <div class="composer-input-row">
+          <textarea
+            id="userInput"
+            rows="3"
+            placeholder="Опишите задачу печати (например: «Кронштейн под нагрузку, PETG, без поддержек» или выберите один из 7 кейсов слева)..."
+          ></textarea>
+          <button id="sendBtn" class="btn btn-send">Отправить ▶</button>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Модальное окно настроек LLM API (Base URL, API Key, Model) -->
+  <div class="modal-backdrop hidden" id="settingsModal">
+    <div class="modal-window">
+      <div class="modal-header">
+        <h3>Настройки подключения к LLM (OpenAI-совместимый API)</h3>
+        <button class="modal-close" id="closeSettingsBtn">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-hint">
+          Ключ сохраняется в пользовательских настройках плагина STE Slicer и не хардкодится в исходном коде.
+        </p>
+        <label class="form-label">Base URL</label>
+        <input type="text" id="cfgBaseUrl" class="form-input" placeholder="https://api.timeweb.ai/v1" />
+
+        <label class="form-label">Модель (Model ID)</label>
+        <input type="text" id="cfgModel" class="form-input" placeholder="dashscope/qwen3.8-flash" />
+
+        <label class="form-label">API Key (выданный организаторами)</label>
+        <input type="password" id="cfgApiKey" class="form-input" placeholder="sk-..." />
+
+        <label class="form-label">Путь к папке с тестовыми моделями («Примеры деталей»)</label>
+        <input type="text" id="cfgExamplesDir" class="form-input" />
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" id="cancelSettingsBtn">Отмена</button>
+        <button class="btn btn-primary" id="saveSettingsBtn">Сохранить настройки</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модальное окно инспектора MCP-инструментов -->
+  <div class="modal-backdrop hidden" id="mcpModal">
+    <div class="modal-window modal-wide">
+      <div class="modal-header">
+        <h3>Зарегистрированные MCP-инструменты (JSON-RPC 2.0: tools/list &amp; tools/call)</h3>
+        <button class="modal-close" id="closeMcpBtn">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="mcpToolsList" class="mcp-tools-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

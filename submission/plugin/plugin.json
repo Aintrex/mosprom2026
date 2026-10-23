@@ -1,0 +1,8 @@
+{
+    "name": "AI Assistant",
+    "author": "Team Stereotech AI",
+    "version": "1.0.0",
+    "description": "Интеллектуальный ИИ-ассистент с MCP-сервером для автоматической настройки 3D/5D печати в STE Slicer",
+    "api": 5,
+    "i18n-catalog": "steslicer"
+}
