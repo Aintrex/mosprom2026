@@ -2,8 +2,8 @@ from .tools import ToolRegistry
 
 
 class AgentService(object):
-    def __init__(self):
-        self.tools = ToolRegistry()
+    def __init__(self, adapter=None):
+        self.tools = ToolRegistry(adapter)
 
     def message(self, text):
         # TODO: replace with a bounded Chat Completions/tool calling loop.

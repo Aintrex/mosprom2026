@@ -1,5 +1,7 @@
 import json
 
+from .tools import UnknownToolError
+
 
 def error(request_id, code, message):
     return {"jsonrpc": "2.0", "id": request_id,
@@ -35,8 +37,8 @@ def dispatch(request, tools):
         try:
             value = tools.call(name, arguments)
             result = {"content": [{"type": "text", "text": json.dumps(value)}],
-                      "isError": False}
-        except KeyError:
+                      "isError": isinstance(value, dict) and value.get("ok") is False}
+        except UnknownToolError:
             return error(request_id, -32602, "Unknown tool")
         except ValueError as exc:
             return error(request_id, -32602, str(exc))
