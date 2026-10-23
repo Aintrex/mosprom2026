@@ -53,7 +53,7 @@
 
 Операционная ошибка get/set находится в JSON-тексте `content`: `{"ok":false,"error":{"code":"slicer_not_connected","message":"..."}}`, MCP выставляет `isError:true`. Неверные аргументы/неизвестный инструмент — JSON-RPC `error.code=-32602`, не операционный успех. Текущие коды операций: `slicer_not_connected`, `no_active_machine`, `setting_unavailable`, `setting_out_of_range`, `qt_timeout`, `setting_not_applied`, `slicer_error`.
 
-У `assistant_status` сейчас отдельный диагностический формат без обёртки `ok/data`. Не считать все ответы MCP одинаковыми. В dev-сервере get/set отвечают `slicer_not_connected`. Работа адаптера в настоящем приложении ещё требует приёмки.
+У `assistant_status` сейчас отдельный диагностический формат без обёртки `ok/data`. Не считать все ответы MCP одинаковыми. В dev-сервере get/set отвечают `slicer_not_connected`. ТЗ 01 принято в STE Slicer 7.10.12 на Hybrid 530 V5.2.4, 3D; чтение, изменение и восстановление layer_height подтверждены API/UI. Это не делает доступными целевые REST-маршруты ниже.
 
 Основному чату SPA не нужно самостоятельно отправлять операции MCP. Для UI действия агента придут как события целевого REST API. `/mcp` остаётся общей границей инструментов и средством диагностики.
 

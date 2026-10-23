@@ -1,5 +1,7 @@
 # Архитектура и контракты
 
+Этот документ описывает общую архитектуру и технические заметки. Порядок работ нашей роли №1 и задания исполнителю ведутся в [PLAN_SLICER.md](PLAN_SLICER.md) и `tasks/`; текущий объём определяет конкретное ТЗ.
+
 ```text
 SPA в браузере -> HTTP на 127.0.0.1 -> AgentService -> Chat Completions
                                       |
@@ -18,10 +20,10 @@ HTTP /mcp -> JSON-RPC dispatch -> тот же ToolRegistry
 - Статические HTML/CSS/JS без npm и серверного рендеринга.
 - `GET /api/health`: `{"status":"ok","mode":"scaffold"}`.
 - `POST /api/message`: `{"text":"..."}` -> `{"reply":"...","events":[],"mode":"scaffold"}`. Ответ локальный демонстрационный. История пока существует только в DOM текущей вкладки.
-- `POST /mcp`: минимальные `initialize`, `tools/list`, `tools/call`, JSON-RPC ошибки и уведомления без ответа. Единственный инструмент `assistant_status` описывает состояние каркаса.
+- `POST /mcp`: минимальные `initialize`, `tools/list`, `tools/call`, JSON-RPC ошибки и уведомления без ответа. Есть `assistant_status` и реальные `get_setting`/`set_setting` для глобального layer_height; ТЗ 01 прошло автоматическую и runtime-приёмку. Контракты HTTP и событий описаны в [API_CONTRACT.md](API_CONTRACT.md).
 - JSON-only POST, ограничение размера, проверка Host/Origin, статические файлы по фиксированному списку, вывод текста в UI через `textContent`.
 
-Это основа для разработки, не готовый MCP-сервер со всеми транспортными возможностями. Версия протокола initialize сейчас фиксирована `2024-11-05`; согласование версии и совместимость клиента проверить отдельно. Экспорт, фактический слайсинг и подключение к LLM отсутствуют. Методы-заготовки явно вызывают `NotImplementedError`.
+Это частичная реализация, не готовый MCP-сервер со всеми транспортными возможностями. Версия протокола initialize сейчас фиксирована `2024-11-05`; согласование версии и совместимость клиента проверить отдельно. Экспорт, фактический слайсинг и подключение к LLM отсутствуют; LLM-клиент остаётся заглушкой.
 
 ## Очередь реализации
 
@@ -36,17 +38,13 @@ HTTP /mcp -> JSON-RPC dispatch -> тот же ToolRegistry
 
 ## Предлагаемые контракты для следующего этапа
 
-Общий результат инструмента: `{"ok": true, "data": {...}}` либо `{"ok": false, "error": {"code": "...", "message": "..."}}`. MCP оборачивает его в `content` и выставляет `isError`; LLM получает тот же фактический результат. Не сообщать успех по одному лишь плану агента.
+Авторитетный контракт HTTP, событий и результатов — [API_CONTRACT.md](API_CONTRACT.md). Не поддерживать здесь вторую конкурирующую схему. Реализованные get/set возвращают `ok/data` либо `ok/error`; MCP оборачивает их в content и выставляет isError. Целевые маршруты истории, загрузки и polling из API_CONTRACT пока не реализованы.
 
-Событие: `{"id": 1, "session_id": "...", "type": "tool_started", "data": {...}}`.
-Предлагаемые типы: `assistant_message`, `tool_started`, `tool_finished`, `slice_progress`, `slice_finished`, `error`.
-Предлагаемый polling: `GET /api/events?session_id=...&after=1`. Эти маршруты пока не реализованы.
-
-## Предлагаемые инструменты, пока не реализованы
+## Целевое покрытие инструментов
 
 | Группа | Имена | Уточнения |
 | --- | --- | --- |
-| Настройки | `get_setting`, `set_setting` | `key`, `value`, область global/extruder, ID экструдера |
+| Настройки | `get_setting`, `set_setting` | Сейчас реализован только global/layer_height; остальные ключи, область extruder и ID экструдера предстоят |
 | Профили | `list_quality_profiles`, `list_materials`, `select_profile`, `select_material`, `create_profile`, `save_profile` | Реальные ID из сборки, не имена, придуманные LLM |
 | Режим | `set_print_mode` | Enum из трёх разрешённых режимов; определить ключ в сборке |
 | Сцена | `load_model`, `list_models`, `get_bounds`, `move_model`, `rotate_model`, `scale_model`, `arrange_models`, `delete_model` | Стабильный ID объекта, единицы mm/degrees/scale factor |
