@@ -1,9 +1,13 @@
 """TASK 03: isolated runtime lookups, overrides, deferred application and MCP."""
+import contextlib
 import json
 import queue
+import sys
 import threading
 import time
+import types
 import unittest
+from unittest import mock
 from urllib.request import Request, urlopen
 
 import test_slicer_modes as modes_tests
@@ -255,21 +259,43 @@ class MachineManager(object):
             self.app.stack.extruders[position].material_value = self.app.material_manager.maps[position][root_material_id].getContainer()
             if self.material_quality:
                 self.apply_group(self.app.quality_manager.groups[self.material_quality])
-            if self.hasUserSettings and self.app.preferences.policy != "always_keep":
-                for stack in [self.app.stack] + list(self.app.stack.extruders.values()):
-                    stack.userChanges.values.clear()
+            # STE 7.10 MachineManager.setMaterial: prompt only in Custom mode, never a silent clear otherwise.
+            if self.hasUserSettings and self.app.preferences.active_mode == 1:
+                if self.app.preferences.policy == "always_discard":
+                    for stack in [self.app.stack] + list(self.app.stack.extruders.values()):
+                        stack.userChanges.values.clear()
+                elif self.app.preferences.policy != "always_keep":
+                    raise AssertionError("Would show the Keep/Discard dialog")
         self._queue(apply)
+
+    # Private STE API used for the prompt-free native "keep" path.
+    blurSettings = types.SimpleNamespace(emit=lambda: None)
+
+    def _getContainerChangedSignals(self):
+        return []
+
+    def _setMaterial(self, position, node):
+        self.app.check_thread()
+        self.calls.append(("material_keep", position, node.getMetaDataEntry("base_file")))
+        self.app.stack.extruders[position].material_value = node.getContainer()
+
+    def _updateQualityWithMaterial(self):
+        if self.material_quality:
+            self.apply_group(self.app.quality_manager.groups[self.material_quality])
 
 
 class Preferences(object):
     def __init__(self, app):
         self.app = app
         self.policy = "ask"
+        self.active_mode = 1  # Custom settings mode, where STE would prompt.
         self.reads = []
 
     def getValue(self, key):
         self.app.check_thread()
         self.reads.append(key)
+        if key == "steslicer/active_mode":
+            return self.active_mode
         if key != "steslicer/choice_on_profile_override":
             raise AssertionError("Unexpected Preferences read")
         return self.policy
@@ -299,6 +325,10 @@ class ProfileApp(modes_tests.ModeApp):
         self.check_thread()
         return self.machine_manager
 
+    def discardOrKeepProfileChangesClosed(self, option):
+        self.check_thread()
+        self.machine_manager.calls.append(("keep_closed", option))
+
     def getQualityManager(self):
         self.check_thread()
         return self.quality_manager
@@ -322,6 +352,12 @@ class ProfileTests(unittest.TestCase):
         self.app = ProfileApp()
         self.adapter = SlicerAdapter(self.app, timeout=0.2)
         self.tools = ToolRegistry(self.adapter)
+        signal = types.ModuleType("UM.Signal")
+        signal.postponeSignals = lambda *signals, **kwargs: contextlib.suppress()
+        signal.CompressTechnique = types.SimpleNamespace(CompressPerParameterValue=1)
+        patch = mock.patch.dict(sys.modules, {"UM.Signal": signal})
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def rpc(self, name, arguments):
         return dispatch(modes_tests.ModeTests.request(name, arguments), self.tools)
@@ -490,11 +526,26 @@ class ProfileTests(unittest.TestCase):
         self.assertIsNotNone(self.app.machine_manager.custom)
         self.assertTrue(self.finish(self.start(lambda: self.adapter.select_material("0", "root-original")))["ok"])
 
-    def test_material_policy_blocks_dialog_and_discard_before_write(self):
+    def test_material_with_overrides_keeps_them_without_prompt(self):
+        # Observed in STE: the agent changes settings before materials; select_material must still work.
+        for policy in ("ask", None, "always_keep"):
+            with self.subTest(policy=policy):
+                self.setUp()
+                self.app.stack.changes.values["layer_height"] = 0.42
+                self.app.stack.extruders["0"].changes.values["material_print_temperature"] = 230
+                self.app.preferences.policy = policy
+                result = self.pump_until_done(self.start(self.material))
+                self.assertTrue(result["ok"], result)
+                self.assertEqual(result["data"]["after"]["root_material_id"], "root-target")
+                self.assertEqual(result["data"]["kept_user_settings"], ["extruder 0: material_print_temperature", "global: layer_height"])
+                self.assertTrue(result["data"]["warnings"])
+                self.assertEqual(self.app.stack.changes.values, {"layer_height": 0.42})
+                self.assertEqual(self.app.machine_manager.calls[-2:], [("material_keep", "0", "root-target"), ("keep_closed", "keep")])
+
+    def test_material_custom_always_discard_refused_before_write(self):
         self.app.stack.changes.values["layer_height"] = 0.42
-        for policy in ("ask", "always_discard", None):
-            self.app.preferences.policy = policy
-            self.assert_error(self.finish(self.start(self.material)), "user_changes_present")
+        self.app.preferences.policy = "always_discard"
+        self.assert_error(self.finish(self.start(self.material)), "user_changes_present")
         self.assertEqual(self.app.machine_manager.calls, [])
         self.assertEqual(self.app.stack.changes.values, {"layer_height": 0.42})
 
@@ -502,7 +553,7 @@ class ProfileTests(unittest.TestCase):
         self.app.stack.changes.values["layer_height"] = 0.42
         self.app.stack.extruders["1"].changes.values["speed_print"] = 17
         self.app.preferences.policy = "always_keep"
-        result = self.applied(self.material)
+        result = self.pump_until_done(self.start(self.material))  # Prompt-free keep path is synchronous.
         self.assertTrue(result["ok"])
         self.assertTrue(result["data"]["has_user_settings"])
         self.assertEqual(self.app.stack.changes.values, {"layer_height": 0.42})

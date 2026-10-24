@@ -33,6 +33,19 @@ READ_ALIASES = {"wait_for_slicing": "get_slicing_status", "wait_for_export": "ge
 # These fork integration errors precede mutation, unlike an unknown/partial failure.
 PREWRITE_BUSY = ("slicing_busy", "export_busy", "selection_busy", "model_load_busy",
                  "model_operation_busy", "arrangement_busy", "switch_in_progress")
+# Refusals raised by preflight checks before any native write (verified per call site).
+# The turn may continue after them, and they do not make the current slice stale.
+NOT_STARTED = PREWRITE_BUSY + ("user_changes_present", "custom_profile_active", "setting_out_of_range", "setting_disabled",
+                               "setting_read_only", "setting_scope_unavailable", "setting_option_unavailable",
+                               "auto_slicing_enabled", "slice_not_found", "slice_result_stale", "export_writer_unavailable",
+                               "export_scene_unsupported", "empty_scene", "mode_unavailable")
+
+
+def not_started(result):
+    error = result.get("error") if isinstance(result, dict) and not result.get("ok") else None
+    if not isinstance(error, dict):
+        return False
+    return error.get("code") in NOT_STARTED or error.get("stage") == "preflight" and error.get("operation_started") is False
 EXCLUDED = ("load_model", "assistant_status")
 SYSTEM_PROMPT = (
     "Ты — инженерный ассистент STE Slicer (Stereotech, форк Cura 3.6). Используй только реально переданные tools. "
@@ -46,7 +59,8 @@ SYSTEM_PROMPT = (
     "cylindrical (5D Spiral) и cylindrical_full (5D) — печать на поворотной оси для тел вращения "
     "(трубы, втулки, валы, стаканы, детали со свесами вокруг оси): меньше поддержек и прочнее в радиальном направлении. "
     "Если пользователь явно назвал режим (3D/5D/спираль), используй его. Режим лучше выбрать до импорта, но set_print_mode работает и с моделями на сцене. "
-    "3) list_materials/select_material по реальному root ID (PLA/PETG/ABS и т.п. из запроса), затем list_quality_profiles/select_profile. "
+    "3) list_materials/select_material по реальному root ID (PLA/PETG/ABS и т.п. из запроса), затем list_quality_profiles/select_profile — "
+    "до изменения отдельных настроек: смена материала сохраняет уже изменённые настройки, но температуры могли быть подобраны под прежний материал. "
     "Перед импортом вызови list_models: если на сцене уже есть другие модели, скажи пользователю, что нарезка и проект возьмут все модели; "
     "удаляй их delete_model только с его согласия. "
     "4) load_model_file по file_id вложения; затем list_models и get_model_state (габариты, outside_build_area). "
@@ -58,7 +72,8 @@ SYSTEM_PROMPT = (
     "6) Настройки из задачи через set_setting (поддержки support_enable, заполнение infill_sparse_density, стенки wall_line_count, "
     "высота слоя layer_height, адгезия adhesion_type и т.п.); незнакомый ключ уточни describe_settings с keys или query. "
     "7) start_slicing → wait_for_slicing → get_slicing_result (время и материал). "
-    "8) Если пользователь просил G-code/проект/«полный цикл»: export_gcode и/или save_project_3mf по slice_id, затем wait_for_export. "
+    "8) Если пользователь просил G-code/проект/«полный цикл»: файлы пишутся строго по одному — export_gcode → wait_for_export, "
+    "затем save_project_3mf → wait_for_export (одновременная запись отклоняется как export_busy). "
     "9) Итог: что выбрано и почему (режим, профиль, материал, ключевые настройки, ориентация), время и расход по данным STE. "
     "\n\nПравила инструментов: "
     "числа передавай JSON-числами (layer_height 0.12, угол 90), bool — true/false, enum — строкой из options. "
@@ -643,6 +658,12 @@ class AgentService(object):
                         if executed and self.tools.is_mutating(name):
                             if result.get("ok"):
                                 applied.append(name)
+                            elif not_started(result):
+                                # Nothing ran: let the model wait/fix the cause instead of ending the turn.
+                                result = copy.deepcopy(result)
+                                result["error"]["executed"] = False
+                                if result["error"].get("code") in PREWRITE_BUSY:
+                                    result["error"]["message"] += ". Ничего не запускалось: дождитесь окончания текущей операции (wait_for_slicing / wait_for_export) и повторите вызов"
                             else:
                                 stopped = LLMError("mutation_unconfirmed",
                                     "Изменяющий инструмент отклонён либо результат не подтверждён. Дальнейшие действия остановлены; перечитайте состояние/UI без автоповтора")
@@ -778,7 +799,7 @@ class AgentService(object):
             session = self._session(sid)
             if self.tools.is_mutating(name) and receipt is not None and receipt.get("write"):
                 self._write_pending = False
-                busy = not result.get("ok") and result.get("error", {}).get("code") in PREWRITE_BUSY
+                busy = not_started(result)
                 if name not in ("export_gcode", "save_project_3mf"):
                     if busy:
                         for record in self._operations.values():
@@ -1047,7 +1068,7 @@ class AgentService(object):
         if mutating:
             with self._lock:
                 self._write_pending = False
-                busy = not result.get("ok") and result.get("error", {}).get("code") in PREWRITE_BUSY
+                busy = not_started(result)
                 # Same rule as agent writes: any non-busy scene/settings write makes old slices/downloads stale.
                 if name not in ("export_gcode", "save_project_3mf") and not busy and not self._closed:
                     self._invalidate_operations()

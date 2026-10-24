@@ -119,6 +119,19 @@ class OperationEventsTests(unittest.TestCase):
             self.assertNotIn("identity", artifact)
             self.assertNotIn(CONFIG["api_key"], json.dumps(snapshot))
 
+    def test_busy_second_export_is_not_started_and_turn_continues(self):
+        # Observed in STE: G-code and 3MF requested back to back; the second write is refused as busy.
+        snapshot = self.send(calls(tool("export_gcode", {"slice_id": self.slice_id}),
+                                   tool("save_project_3mf", {"slice_id": self.slice_id}, "project")),
+                             {"content": "G-code записывается, проект сохраню следом"})
+        results = [e["data"]["result"] for e in snapshot["tool_events"] if e["type"] == "tool_finished"]
+        self.assertTrue(results[0]["ok"], results[0])
+        self.assertEqual((results[1]["error"]["code"], results[1]["error"]["executed"]), ("export_busy", False))
+        self.assertIn("wait_for_export", results[1]["error"]["message"])
+        self.assertFalse(snapshot["messages"][-1]["is_error"])
+        self.assertEqual(len(self.llm.requests), 2, "The model got the refusal and answered; the turn was not cut")
+        self.assertTrue(self.adapter.get_slicing_status(self.slice_id)["data"]["valid"], "A refusal does not stale the slice")
+
     def test_duplicate_reads_and_terminal_do_not_consume_events_or_poll_forever(self):
         self.launch_slice()
         self.poll()

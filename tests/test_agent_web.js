@@ -678,6 +678,16 @@ async function main() {
   assert.match(visibleText(stagedApp.elements.messages.children[0]), /защиты не отключаются автоматически/);
   assert.match(visibleText(stagedApp.elements.messages.children[1]), /Вызов штатной операции уже начат/);
   assert.equal(nodes(stagedApp.elements.messages, "button").length, 0);
-  console.log("Agent web contract: 33 scenarios OK (30 preserved + numeric admission/transform stages + scene controls; offline DOM).");
+  // Readback noise is rounded for geometry/estimates; unknown setting keys keep their key as label.
+  const roundedApp = harness(path => ({code: 200, body: path === "/api/status" ? status : toolSnapshot([
+    {name: "get_model_state", data: {object_id: "m", position_mm: {x: 3.4e-14, y: 29.497451782226562, z: -0.0000015}, bounds: {size: {x: 58.99745178222656, y: 25, z: 58.994903564453125}, unit: "mm"}}},
+    {name: "get_slicing_result", data: {source: "ste_slicer", slice_id: "s", print_time_seconds: 17121, material: {length_mm: 10430.4, weight_g: 31.112081953125}}},
+    {name: "get_setting", data: {key: "cylindrical_mode_base_diameter", value: 6, unit: "mm"}},
+    {name: "get_setting", data: {key: "some_new_key", value: 0.123456, unit: "mm"}}
+  ])}));
+  await settle();
+  const rounded = visibleText(roundedApp.elements.messages);
+  for (const phrase of ["0 / 29,5 / 0 мм", "59 / 25 / 58,99 мм", "длина 10430 мм; масса 31,1 г", "Диаметр 5D-основания: 6 мм", "some_new_key: 0,123456 мм"]) assert(rounded.includes(phrase), phrase);
+  console.log("Agent web contract: 34 scenarios OK (30 preserved + numeric admission/transform stages + scene controls + readable numbers; offline DOM).");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

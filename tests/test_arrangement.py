@@ -456,5 +456,7 @@ class ArrangementTests(unittest.TestCase):
         sid = service.create_session()["session_id"]
         service.submit_message(sid, {"text": "Расставь модели", "client_message_id": "arrange"})
         results = [e["data"]["result"] for e in service.get_session(sid)["tool_events"] if e["type"] == "tool_finished"]
-        self.assertEqual([r["error"]["code"] for r in results], ["arrangement_busy", "tool_not_executed"])
-        self.assertEqual(len(llm.requests), 1)
+        # Busy refusals run nothing, so the turn continues and the next mutation is refused the same way.
+        self.assertEqual([r["error"]["code"] for r in results], ["arrangement_busy", "model_operation_busy"])
+        self.assertTrue(all(r["error"]["executed"] is False for r in results))
+        self.assertIn(self.ids[0], [m["object_id"] for m in self.adapter.list_models()["data"]["models"]])

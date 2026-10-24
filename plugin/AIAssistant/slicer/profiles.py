@@ -232,8 +232,14 @@ class MaterialSelection(_Selection):
         after = _material_current(app, self.stack, self.manager, self.position)
         if after is None or after["root_material_id"] != self.root or after["material_id"] != self.target["material_id"]:
             return None
-        return {"extruder_id": self.position, "before": self.before, "after": after,
-                "quality_type_after": _text(self.manager.activeQualityType), "has_user_settings": bool(self.manager.hasUserSettings)}
+        result = {"extruder_id": self.position, "before": self.before, "after": after,
+                  "quality_type_after": _text(self.manager.activeQualityType), "has_user_settings": bool(self.manager.hasUserSettings)}
+        kept = sorted(("global" if position is None else "extruder " + position) + ": " + key
+                      for position, values in self.overrides.items() for key in values)
+        if kept:
+            result["kept_user_settings"] = kept
+            result["warnings"] = ["Изменённые вами настройки сохранены (как «Keep» в STE). Проверьте, подходят ли они новому материалу, например температуры."]
+        return result
 
     def start(self, app):
         self._start(app)
@@ -247,11 +253,32 @@ class MaterialSelection(_Selection):
         if self.manager.activeQualityChangesGroup is not None:
             raise SlicerError("custom_profile_active", "Материал может сбросить активный custom quality profile. Сначала решите его судьбу в STE Slicer.")
         if self.manager.hasUserSettings or any(self.overrides.values()):
-            policy = app.getPreferences().getValue("steslicer/choice_on_profile_override")
-            if policy != "always_keep":
-                raise SlicerError("user_changes_present", "Есть пользовательские overrides; выбор материала может вызвать Keep/Discard или их сброс. Изменение не начато. Требуется чистое состояние либо штатная политика always_keep.")
+            # Native setMaterial never clears userChanges itself; only in Custom mode it asks
+            # Keep/Discard (SteSlicerApplication.discardOrKeepProfileChanges). We apply the native
+            # "keep" without the modal prompt, and refuse only where STE would discard silently.
+            prefs = app.getPreferences()
+            custom = str(prefs.getValue("steslicer/active_mode")) == "1"
+            if custom and prefs.getValue("steslicer/choice_on_profile_override") == "always_discard":
+                raise SlicerError("user_changes_present", "В STE включено «всегда сбрасывать изменения»: смена материала удалила бы ваши настройки. Материал не менялся; выберите его в STE или смените эту политику.")
+            self._keep_without_prompt(app)
+            return None
         self.manager.setMaterialById(self.position, self.root)
         return None
+
+    def _keep_without_prompt(self, app):
+        manager = self.manager
+        node = _material_nodes(app, self.stack, _extruder(self.stack, self.position)).get(self.root)
+        if (node is None or not all(hasattr(manager, name) for name in
+                                    ("_setMaterial", "_updateQualityWithMaterial", "_getContainerChangedSignals", "blurSettings")) or
+                not hasattr(app, "discardOrKeepProfileChangesClosed")):
+            raise SlicerError("backend_state_unavailable", "Не подтверждён штатный путь смены материала с сохранением настроек; материал не менялся")
+        from UM.Signal import postponeSignals, CompressTechnique
+        # Body of MachineManager.setMaterial (STE 7.10) minus the prompt, then the native "keep".
+        manager.blurSettings.emit()
+        with postponeSignals(*manager._getContainerChangedSignals(), compress=CompressTechnique.CompressPerParameterValue):
+            manager._setMaterial(self.position, node)
+            manager._updateQualityWithMaterial()
+        app.discardOrKeepProfileChangesClosed("keep")
 
     def check(self, app):
         self._check(app)

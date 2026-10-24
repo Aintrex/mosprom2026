@@ -288,6 +288,8 @@
     if (number(value)) return String(value).replace(".", ",");
     return typeof value === "string" ? value : "не сообщено";
   }
+  // Geometry/estimates only: float readback noise like 58.99745178 → 58,997. Setting values stay exact.
+  function roundText(value, digits) { var f = Math.pow(10, digits); return number(value) ? valueText(Math.round(value * f) / f) : valueText(value); }
   function plainValue(value) { return typeof value === "string" || typeof value === "boolean" || number(value); }
   function unitText(unit) { return labelFrom({mm: "мм", "mm/s": "мм/с", "°C": "°С", g: "г", s: "с", m: "м"}, unit) || unit; }
   var settingNames = {layer_height: "Высота слоя", layer_height_0: "Высота первого слоя", line_width: "Ширина линии",
@@ -295,7 +297,9 @@
     infill_pattern: "Рисунок заполнения", support_enable: "Поддержки", support_type: "Область поддержек", support_angle: "Угол поддержек",
     material_print_temperature: "Температура сопла", material_bed_temperature: "Температура стола", speed_print: "Скорость печати",
     retraction_enable: "Откат", retraction_amount: "Длина отката", retraction_speed: "Скорость отката", cool_fan_enabled: "Обдув",
-    cool_fan_speed: "Скорость вентилятора", adhesion_type: "Прилипание к столу"};
+    cool_fan_speed: "Скорость вентилятора", adhesion_type: "Прилипание к столу",
+    cylindrical_layer_height: "Высота слоя 5D", cylindrical_layer_height_0: "Высота первого слоя 5D",
+    cylindrical_mode_base_diameter: "Диаметр 5D-основания", wall_thickness: "Толщина стенки", infill_line_distance: "Шаг заполнения"};
   var toolNames = {get_setting: "Чтение настройки", set_setting: "Изменение настройки", describe_settings: "Доступные настройки",
     get_slicer_state: "Состояние STE Slicer", set_print_mode: "Режим печати", list_models: "Объекты сцены",
     load_model: "Загрузка модели", load_model_file: "Загрузка вложенной модели", get_model_bounds: "Габариты модели",
@@ -311,7 +315,7 @@
   function progressText(progress) { return number(progress) && progress >= 0 && progress <= 1 ? "Прогресс: " + Math.round(progress * 100) + "%" : "Прогресс не сообщён"; }
   function boundsText(bounds) {
     var size = bounds && bounds.size;
-    return size ? "Размеры по осям X / Y / Z: " + ["x", "y", "z"].map(function (axis) { return valueText(size[axis]); }).join(" / ") +
+    return size ? "Размеры по осям X / Y / Z: " + ["x", "y", "z"].map(function (axis) { return roundText(size[axis], 2); }).join(" / ") +
       (typeof bounds.unit === "string" ? " " + unitText(bounds.unit) : " (единица не сообщена)") : null;
   }
   function estimates(result) {
@@ -321,8 +325,8 @@
     }
     var material = result.material || {};
     return ["Оценки STE Slicer. Время печати: " + time + ".",
-      "Материал: длина " + valueText(material.length_mm) + (number(material.length_mm) ? " мм" : "") +
-      "; масса " + valueText(material.weight_g) + (number(material.weight_g) ? " г" : "") + "."];
+      "Материал: длина " + roundText(material.length_mm, 0) + (number(material.length_mm) ? " мм" : "") +
+      "; масса " + roundText(material.weight_g, 1) + (number(material.weight_g) ? " г" : "") + "."];
   }
   function problem(error, rejected) {
     error = error || {};
@@ -344,10 +348,13 @@
     }
     else if (code === "observation_interrupted") { title = "Наблюдение прервано"; next = "Слайсер мог продолжить работу. Прочитайте статус по ID или проверьте UI, не запускайте операцию повторно."; }
     else if (code === "tool_not_executed") title = "Вызов пропущен";
-    else if (/_unsupported$|_not_found$|^auto_slicing_enabled$|^empty_scene$|^agent_busy$/.test(code)) {
-      title = "Операция не разрешена в текущем состоянии"; next = "Проверка до запуска: STE Slicer не менялся. Устраните причину и повторите вручную.";
+    else if (/_busy$/.test(code) || code === "switch_in_progress") {
+      title = "Слайсер занят другой операцией"; next = "Ничего не запускалось. Дождитесь окончания текущей операции и повторите.";
     }
-    else if (/_busy$/.test(code) || code === "switch_in_progress") title = "Слайсер занят другой операцией";
+    else if (/_unsupported$|_not_found$|^auto_slicing_enabled$|^empty_scene$|^user_changes_present$|^custom_profile_active$|^setting_(out_of_range|disabled|read_only|scope_unavailable|option_unavailable)$/.test(code) ||
+        error.executed === false) {
+      title = "Операция не разрешена в текущем состоянии"; next = "Проверка до запуска: STE Slicer не менялся. Устраните причину и повторите.";
+    }
     else if (/_failed$/.test(code)) title = "Слайсер сообщил об ошибке";
     var reason = typeof error.message === "string" ? error.message : "Причина не сообщена.";
     if (networkTimeout) {
@@ -397,7 +404,7 @@
     name = labelFrom({wait_for_slicing: "get_slicing_status", wait_for_export: "get_export_status"}, name) || name;
     if (!data || typeof data !== "object") return null;
     args = args || {};
-    var key = data.key || args.key, label = labelFrom(settingNames, key) || "Настройка", unit = typeof data.unit === "string" ? " " + unitText(data.unit) : " (единица не сообщена)";
+    var key = data.key || args.key, label = labelFrom(settingNames, key) || (typeof key === "string" ? key : "Настройка"), unit = typeof data.unit === "string" ? " " + unitText(data.unit) : " (единица не сообщена)";
     if (name === "get_setting" && plainValue(data.value)) return [label + ": " + valueText(data.value) + unit];
     if (name === "set_setting" && plainValue(data.after)) {
       return [label + (plainValue(data.before) ? ": " + valueText(data.before) + " → " : ": подтверждённое значение ") + valueText(data.after) + unit +
@@ -442,13 +449,13 @@
     if (/^(move|rotate|scale|center)_model$/.test(name) && data.object_id && typeof data.changed === "boolean") return transformLines(data);
     if (name === "delete_model" && data.removed === true) return ["Модель удалена из сцены (исходный файл не тронут). Отмена: Ctrl+Z в STE Slicer."];
     if (name === "get_model_state" && data.object_id && data.position_mm) return ["ID объекта: " + data.object_id,
-      "Позиция X / Y / Z: " + ["x", "y", "z"].map(function (axis) { return valueText(data.position_mm[axis]); }).join(" / ") + " мм", boundsText(data.bounds)];
+      "Позиция X / Y↑ / Z: " + positionText(data.position_mm), boundsText(data.bounds)];
     if ((name === "arrange_models" || name === "get_arrangement_status") && data.arrangement_id && data.state) return ["Расстановка: " + stateText(data.state),
       "ID: " + data.arrangement_id, data.all_fit === false ? "Есть выход за границы стола." : "Полное размещение не подтверждено."];
     return null;
   }
   function positionText(position) {
-    return position ? ["x", "y", "z"].map(function (axis) { return valueText(position[axis]); }).join(" / ") + " мм" : "не сообщена";
+    return position ? ["x", "y", "z"].map(function (axis) { return roundText(position[axis], 2); }).join(" / ") + " мм" : "не сообщена";
   }
   function transformLines(data) {
     var before = data.before || {}, after = data.after || {};
