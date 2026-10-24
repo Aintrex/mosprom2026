@@ -31,7 +31,7 @@
 Каталог установки уточнить через **Справка → Показать папку конфигурации**. На этой машине использовался %APPDATA%\steslicer\7.10\plugins. Если это по-прежнему верный каталог, обновить его можно следующими командами **при закрытом слайсере**, после резервной копии:
 
 ```powershell
-Set-Location 'C:\Users\sevay\Documents\ChatGPT\hackaton_2026'
+Set-Location (Read-Host 'Путь к вашей копии репозитория')
 $demoPluginsDir = Join-Path $env:APPDATA 'steslicer\7.10\plugins'
 if (-not (Test-Path -LiteralPath $demoPluginsDir -PathType Container)) {
     throw 'Уточните папку plugins через меню STE Slicer'

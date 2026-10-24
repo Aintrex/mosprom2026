@@ -687,10 +687,10 @@ Invoke-ExtendedTool 'set_setting' @{key='retraction_combing'; scope='global'; va
 Invoke-ExtendedTool 'get_setting' @{key='retraction_combing'; scope='global'} | ConvertTo-Json -Depth 25
 ```
 
-Температура первого слоя: выберите точную runtime-позицию из диагностики (UI-позиция инструментом не меняется). Сохраните также показания другого экструдера/UI, если он есть; после записи сверьте именно выбранный стек.
+Температура первого слоя: пользователь берёт строковую позицию из проверенной конфигурации своей машины; `"0"` — только пример. get_slicer_state не перечисляет extruders. Первое действие Get-ExtendedWritable ниже — readonly describe: он подтверждает позицию и метаданные либо отказывает до записи. При неизвестной позиции остановитесь, ID не угадывайте. UI-позиция инструментом не меняется. Сохраните также показания другого экструдера/UI, если он есть; после записи сверьте именно выбранный стек.
 
 ```powershell
-$extendedExtruderId = Read-Host 'Точный runtime extruder_id из get_slicer_state'
+$extendedExtruderId = Read-Host 'Известная строковая позиция экструдера из проверенной конфигурации машины'
 $extendedExtMeta = Get-ExtendedWritable 'material_print_temperature_layer_0' 'extruder' $extendedExtruderId
 if ($extendedExtMeta.type -ne 'float') { throw 'Не подтверждён float' }
 $extendedExtMeta | ConvertTo-Json -Depth 25

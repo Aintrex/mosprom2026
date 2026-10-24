@@ -74,8 +74,8 @@
 
 **Временная помощь роли 2A завершена для ревью:** POST /api/files и приватное ограниченное хранилище, без передачи агенту/native-импорта/UI/downloads. Сохранены 216 прежних проверок; итог — 231 Python-тест и JS5. [ROLE_02A_REPORT.md](reports/ROLE_02A_REPORT.md). ТЗ 10 остановлено на черновой границе, см. [TASK_10_PROGRESS.md](reports/TASK_10_PROGRESS.md); регрессия прежних сценариев не подтверждает 5D-нарезку. 2B отдельно не начинать.
 
-Корень STE: `C:/Users/sevay/Desktop/SourceSTE/STE-Slicer/STE-Slicer-master`.
-Uranium находится рядом: `C:/Users/sevay/Desktop/SourceSTE/STE-Slicer/Uranium-steslicer`.
+Корень STE: `<SOURCE_ROOT>/STE-Slicer-master`.
+Uranium находится рядом: `<SOURCE_ROOT>/Uranium-steslicer`.
 
 | Факт | Где проверять |
 | --- | --- |

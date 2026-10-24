@@ -16,7 +16,7 @@ ProcessCliJob.Finished, exit Glicer, progress1 и Done различаются. P
 
 ## Источники и уточнения протокола
 
-Чтение выданной локальной копии `C:/Users/sevay/Desktop/SourceSTE/STE-Slicer/STE-Slicer-master` (не runtime-зависимость), Uranium — соседний `Uranium-steslicer`:
+Чтение выданной локальной копии `<SOURCE_ROOT>/STE-Slicer-master` (не runtime-зависимость), Uranium — соседний `Uranium-steslicer`:
 
 - `plugins/CLIParserBackend/__init__.py`, `steslicer/BackendManager/BackendManager.py`: cylindrical регистрируется как CLIParserBackend, а cylindrical_full как CylindricalBackend. Manager пересылает оценки всех backend в общую PI; защита от чужого источника сохранена.
 - `CliParserBackend.py`, slice около239–261, _onStartSliceCompleted около300–383, _onProcessCliFinished около395–519: Processing приходит до создания следующих refs; Glicer запускается новым Popen, parser _process может переиспользоваться. ProcessCliJob.py ждёт Glicer, но Finished не гарантирует exit0 — код проверяется отдельно.

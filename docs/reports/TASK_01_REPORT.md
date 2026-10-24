@@ -31,9 +31,9 @@
 - STE `steslicer/Settings/SteSlicerContainerStack.py:73`: `userChanges` — контейнер пользовательских изменений.
 - STE `resources/definitions/fdmprinter.def.json:1525`: `layer_height`, float, мм, минимум через выражение `0.001`, warning-границы отдельно. В плагине минимум не зашит: читается текущий стек. `hte530v5.2.4.def.json` наследует `steprinter530_v5.2.4`, далее ограничения определяются активным стеком с учётом наследования.
 
-Корни: STE — `C:/Users/sevay/Desktop/SourceSTE/STE-Slicer/STE-Slicer-master`, Uranium — соседний `Uranium-steslicer`. Эти пути отсутствуют в runtime-коде плагина.
+Корни: STE — `<SOURCE_ROOT>/STE-Slicer-master`, Uranium — соседний `Uranium-steslicer`. Эти пути отсутствуют в runtime-коде плагина.
 
-Локально обнаружены `C:/Program Files/Stereotech STE Slicer 7.10` (в том числе `python35.dll`) и `C:/Users/sevay/AppData/Roaming/steslicer/7.10/plugins`. В существующем логе есть запуск движка `Cura_SteamEngine version 7.10.12`; это **не подтверждение версии GUI, загрузки нового плагина или приёмки**. Запущенный процесс STE при проверке не найден. Расхождения API установленной сборки со справочной копией не установлены и не исключены: runtime не проверялся.
+Локально обнаружены `C:/Program Files/Stereotech STE Slicer 7.10` (в том числе `python35.dll`) и `%APPDATA%/steslicer/7.10/plugins`. В существующем логе есть запуск движка `Cura_SteamEngine version 7.10.12`; это **не подтверждение версии GUI, загрузки нового плагина или приёмки**. Запущенный процесс STE при проверке не найден. Расхождения API установленной сборки со справочной копией не установлены и не исключены: runtime не проверялся.
 
 ## Запущенные проверки
 

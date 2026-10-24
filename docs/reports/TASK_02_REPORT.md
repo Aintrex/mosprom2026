@@ -17,7 +17,7 @@
 
 ## Проверенные методы исходников
 
-Читались справочные STE `C:/Users/sevay/Desktop/SourceSTE/STE-Slicer/STE-Slicer-master` и соседний `Uranium-steslicer`. Эти пути не используются runtime-кодом.
+Читались справочные STE `<SOURCE_ROOT>/STE-Slicer-master` и соседний `Uranium-steslicer`. Эти пути не используются runtime-кодом.
 
 | Источник | Подтверждённое поведение |
 | --- | --- |

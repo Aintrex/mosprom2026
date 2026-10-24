@@ -4,7 +4,7 @@
 
 ## Контекст и цель
 
-Рабочий репозиторий: `C:/Users/sevay/Documents/ChatGPT/hackaton_2026`.
+Рабочий репозиторий: `<REPO_ROOT>`.
 Прочитать корневой `AGENTS.md`, `docs/PLAN_SLICER.md`, текущие `AIAssistant.py`, `slicer/adapter.py`, `agent/service.py`, `agent/tools.py`, `agent/mcp.py` и `server.py`.
 
 В каркасе есть локальный HTTP, `/mcp` и один диагностический инструмент. Связи с настоящим API слайсера нет. Нужно создать первое доказательство интеграции: внешний HTTP-запрос -> MCP-инструмент -> главный Qt-поток -> активный стек -> фактический результат.
@@ -15,8 +15,8 @@
 
 Не менять эти каталоги и не переносить их в наш репозиторий:
 
-- STE: `C:/Users/sevay/Desktop/SourceSTE/STE-Slicer/STE-Slicer-master`.
-- Uranium: `C:/Users/sevay/Desktop/SourceSTE/STE-Slicer/Uranium-steslicer`.
+- STE: `<SOURCE_ROOT>/STE-Slicer-master`.
+- Uranium: `<SOURCE_ROOT>/Uranium-steslicer`.
 
 Подтверждённые точки входа:
 

@@ -6,7 +6,7 @@
 
 Дать агенту реальные списки встроенных профилей качества и материалов под текущую конфигурацию, возможность выбрать существующий доступный профиль и материал конкретного экструдера и подтвердить фактическое состояние. Названия не заменяют ID, молчаливый отказ API не считается успехом.
 
-Прочитать `AGENTS.md`, `docs/PLAN_SLICER.md`, `docs/API_CONTRACT.md` и текущий код/проверки. Репозиторий: `C:/Users/sevay/Documents/ChatGPT/hackaton_2026`. Проверить git status и сохранить незавершённые изменения. Код одновременно меняет один исполнитель.
+Прочитать `AGENTS.md`, `docs/PLAN_SLICER.md`, `docs/API_CONTRACT.md` и текущий код/проверки. Репозиторий: `<REPO_ROOT>`. Проверить git status и сохранить незавершённые изменения. Код одновременно меняет один исполнитель.
 
 Основной код — `slicer/`, схемы и вызовы — существующий `agent/tools.py`. Допускаются небольшие модули для профилей и материалов. Сохранить мост Qt, четыре инструмента ТЗ 01/02 и их контракты. Не менять SPA, HTTP-транспорт и будущие REST-маршруты. Новых runtime-зависимостей, singleton, универсального workflow-движка и скрытого изменения Preferences не добавлять.
 
@@ -14,7 +14,7 @@
 
 ## Источники API
 
-Справочная копия: `C:/Users/sevay/Desktop/SourceSTE/STE-Slicer/STE-Slicer-master`; Uranium — соседний `Uranium-steslicer`. Исходники читать, не менять и не вшивать пути в плагин.
+Справочная копия: `<SOURCE_ROOT>/STE-Slicer-master`; Uranium — соседний `Uranium-steslicer`. Исходники читать, не менять и не вшивать пути в плагин.
 
 - `steslicer/SteSlicerApplication.py`: `getMachineManager()`, `getQualityManager()`, `getMaterialManager()`.
 - `steslicer/Machines/QualityManager.py`: `getQualityGroups(global_stack)` возвращает словарь quality_type -> QualityGroup, включая недоступные группы.

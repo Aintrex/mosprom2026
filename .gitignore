@@ -35,3 +35,9 @@ Thumbs.db
 # Final deliverables may be tracked deliberately
 !results/**/*.3mf
 !results/**/*.gcode
+
+/docs/CHECKPOINT_01_SCRIPT.docx
+
+/docs/PROGRESS_SIMPLE.docx
+
+/docs/TEST_AI_ASSISTANT_WINDOWS.docx

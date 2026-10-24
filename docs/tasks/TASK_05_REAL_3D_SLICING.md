@@ -25,7 +25,7 @@ Python 3.5, стандартная библиотека и PyQt5 из прило
 
 ## Подтверждённые места в исходниках
 
-STE: C:/Users/sevay/Desktop/SourceSTE/STE-Slicer/STE-Slicer-master. Uranium: соседний Uranium-steslicer. Пути не добавлять в runtime-код, исходники не менять.
+STE: <SOURCE_ROOT>/STE-Slicer-master. Uranium: соседний Uranium-steslicer. Пути не добавлять в runtime-код, исходники не менять.
 
 - plugins/CuraEngineBackend/CuraEngineBackend.py: forceSlice вызывает markSliceAll и slice; это запуск, не результат. forceSlice может затронуть несколько платформ — первый объём ограничить одной непустой активной платформой.
 - Там же: slicingStarted, slicingCancelled, backendStateChange, processingProgress, backendError, backendQuit; прочитать _onStartSliceCompleted, _onSocketError, _onSlicingFinishedMessage и сбросы при изменении сцены/настроек.

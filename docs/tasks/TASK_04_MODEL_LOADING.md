@@ -12,7 +12,7 @@
 
 ## Источники и особенности API
 
-STE: C:/Users/sevay/Desktop/SourceSTE/STE-Slicer/STE-Slicer-master; Uranium — соседний Uranium-steslicer. Это справочная копия для чтения, не путь в runtime-коде.
+STE: <SOURCE_ROOT>/STE-Slicer-master; Uranium — соседний Uranium-steslicer. Это справочная копия для чтения, не путь в runtime-коде.
 
 - steslicer/SteSlicerApplication.py: readLocalFile(QUrl, skip_project_file_check=False), _readMeshFinished, fileLoaded, fileCompleted, openProjectFile, checkIsValidProjectFile.
 - В этой копии fileLoaded испускается **до** цикла добавления узлов; fileCompleted — после него. При пустом результате fileCompleted также возможен. При раннем выходе завершение может не прийти вообще. Нужны проверка сцены, привязка к своему файлу и конечное ожидание.

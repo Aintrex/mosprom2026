@@ -15,7 +15,7 @@
 
 ## Source-схема и подтверждение хранения
 
-Читалась выданная копия `C:/Users/sevay/Desktop/SourceSTE/STE-Slicer/STE-Slicer-master` и соседний Uranium-steslicer, без изменения/копирования дистрибутива и без runtime-зависимости от пути:
+Читалась выданная копия `<SOURCE_ROOT>/STE-Slicer-master` и соседний Uranium-steslicer, без изменения/копирования дистрибутива и без runtime-зависимости от пути:
 
 - QualityManager.getQualityChangesGroups/createQualityChanges/_createQualityChanges: Create копирует старые QC и user, очищает user и добавляет контейнеры, возвращаетNone, **не выбирает** новую группу. ProfilesPage.qml ждёт itemsChanged и активирует отдельно. Наблюдатель ждёт индекс/полноту и делает свой штатный setQualityChangesGroup(no_dialog=True) с readback.
 - MachineManager.setQualityChangesGroup/_setQualityChangesGroup: подтверждаются global/extruder quality и qualityChanges IDs, availability и user overrides. ContainerManager используется через фактический **ContainerManager.getInstance()**, getter app.getContainerManager у выданной сборки отсутствует; singleton проверяется по своему MachineManager.

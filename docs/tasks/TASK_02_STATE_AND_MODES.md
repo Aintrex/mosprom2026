@@ -10,8 +10,8 @@
 
 Прочитать `AGENTS.md`, `docs/PLAN_SLICER.md`, `docs/API_CONTRACT.md`, реализацию и проверки ТЗ 01. Проверить git status и сохранить все существующие изменения. В общей рабочей папке runtime-код меняет один исполнитель.
 
-Рабочий каталог: `C:/Users/sevay/Documents/ChatGPT/hackaton_2026`.
-Справочные исходники: `C:/Users/sevay/Desktop/SourceSTE/STE-Slicer/STE-Slicer-master`; Uranium — соседний `Uranium-steslicer`. Не менять их и не вшивать пути в runtime.
+Рабочий каталог: `<REPO_ROOT>`.
+Справочные исходники: `<SOURCE_ROOT>/STE-Slicer-master`; Uranium — соседний `Uranium-steslicer`. Не менять их и не вшивать пути в runtime.
 
 Подтверждённые точки API:
 

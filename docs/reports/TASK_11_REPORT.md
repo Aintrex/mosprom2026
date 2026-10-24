@@ -12,7 +12,7 @@
 
 ## Подтверждённые source-различия
 
-Читалась выданная копия `C:/Users/sevay/Desktop/SourceSTE/STE-Slicer/STE-Slicer-master` и соседний Uranium-steslicer, только для справки, без runtime-зависимости/изменения дистрибутива:
+Читалась выданная копия `<SOURCE_ROOT>/STE-Slicer-master` и соседний Uranium-steslicer, только для справки, без runtime-зависимости/изменения дистрибутива:
 
 - `plugins/CylindricalBackend/CylindricalBackend.py`, `steslicer/MultiBackend.py` и BackendManager: outer не имеет собственного parser _process/_socket; использует getBackends. Его StartSliceJob создаёт сообщения через child sockets **до** дальнейших reset: при None будет честный backend_state_unavailable до forceSlice, сокеты вручную не создаются.
 - Full `StartSliceJob.py`: платформа _start_slice_job_build_plate и StartJobResult.Finished, а не поле CLI job. Внутри штатно ожидает свои nested prep jobs.

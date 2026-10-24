@@ -14,7 +14,7 @@
 
 ## Подтверждённые исходники
 
-Читались STE `C:/Users/sevay/Desktop/SourceSTE/STE-Slicer/STE-Slicer-master` и соседний `Uranium-steslicer`. Они не менялись и не копировались в Git; эти пути не используются runtime-кодом.
+Читались STE `<SOURCE_ROOT>/STE-Slicer-master` и соседний `Uranium-steslicer`. Они не менялись и не копировались в Git; эти пути не используются runtime-кодом.
 
 | API / источник | Подтверждение и использование |
 | --- | --- |

@@ -14,7 +14,7 @@ HTTP/SPA, Extension, MCP-транспорт, LLM, `modes.py` и `qt_bridge.py` �
 
 ## Проверенные исходники и политика сохранения
 
-Читались только локальные справочные STE `C:/Users/sevay/Desktop/SourceSTE/STE-Slicer/STE-Slicer-master` и соседний `Uranium-steslicer`. Они не изменялись, не копировались в Git; их пути отсутствуют в runtime-коде.
+Читались только локальные справочные STE `<SOURCE_ROOT>/STE-Slicer-master` и соседний `Uranium-steslicer`. Они не изменялись, не копировались в Git; их пути отсутствуют в runtime-коде.
 
 | API / источник | Вывод для реализации |
 | --- | --- |
