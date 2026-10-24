@@ -73,6 +73,16 @@ class AttachmentTests(unittest.TestCase):
         self.assertIn("load_model_file", schemas)
         self.assertNotIn("load_model", schemas)
 
+    def test_older_history_photos_are_summarised_not_resent(self):
+        store = self.service({"content": "1"}, {"content": "2"}, {"content": "3"})
+        photo = upload(store, upload_tests.PNG, "фото.png")["file_id"]
+        for cmid, ids in (("first", [photo]), ("second", []), ("third", [])):
+            self.send(ids, cmid)
+        encoded = base64.b64encode(upload_tests.PNG).decode()
+        self.assertIn(encoded, json.dumps(self.llm.requests[1]))  # Previous turn keeps the photo.
+        self.assertNotIn(encoded, json.dumps(self.llm.requests[2]))
+        self.assertIn("повторно не передаётся", json.dumps(self.llm.requests[2], ensure_ascii=False))
+
     def test_idempotent_full_ordered_body_and_unknown_limits_before_acceptance(self):
         store = self.service({"content": "ok"})
         ids = [upload(store)["file_id"], upload(store)["file_id"]]

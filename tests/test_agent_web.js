@@ -15,6 +15,10 @@ class Element {
   emit(kind) { this.listeners[kind]({preventDefault() {}}); }
   focus() { this.focused = true; }
 }
+// Scene panel may read list_models/get_model_state via /mcp; nothing else is sent unprompted.
+function readOnlyRpc(r) { return r.path === "/mcp" && ["list_models", "get_model_state"].includes(JSON.parse(r.options.body).params.name); }
+function field(app, id) { return app.elements[id] || (app.elements[id] = new Element("input")); }
+function lastChild(node) { return node.children[node.children.length - 1]; }
 function nodes(root, tag) { return (root.tagName === tag.toUpperCase() ? [root] : []).concat(root.children.flatMap(child => nodes(child, tag))); }
 function visibleText(root) { return root.tagName === "DETAILS" ? "" : root._text + root.children.map(visibleText).join(" "); }
 const idle = () => ({session_id: "session-test", messages: [], tool_events: [], agent_state: "idle", last_event_id: 0, slice: null});
@@ -144,8 +148,9 @@ async function main() {
   assert(!withFiles.requests.some(r => r.path.endsWith("/messages")));
   uploadRelease(); await settle();
   assert.equal(uploadCount, 2);
-  assert(withFiles.elements["attachment-list"].children[0].textContent.startsWith("<photo>.png — загружен"));
-  withFiles.elements["attachment-list"].children[1].children[0].emit("click");
+  assert.match(withFiles.elements["attachment-list"].children[0].textContent, /^<photo>\.pngФото PNG · 12 Б.*Готово: прикреплено/);
+  assert.match(withFiles.elements["attachment-list"].children[1].textContent, /3D-модель STL.*В сцену ещё не импортировано/);
+  lastChild(withFiles.elements["attachment-list"].children[1]).emit("click");
   withFiles.elements["chat-form"].emit("submit"); await settle();
   const fileBody = withFiles.requests.find(r => r.path.endsWith("/messages")).options.body;
   assert.deepEqual(JSON.parse(fileBody).attachment_ids, ["file-1"], "Removed file is not sent");
@@ -167,7 +172,7 @@ async function main() {
   }, withFiles.storage);
   await settle();
   assert(fileRetry.elements["chat-files"].disabled, "Pending file IDs are frozen");
-  assert(fileRetry.elements["attachment-list"].children[0].textContent.startsWith("<photo>.png — загружен"));
+  assert.match(fileRetry.elements["attachment-list"].children[0].textContent, /^<photo>\.png.*Отправляется вместе с сообщением/);
   fileRetry.elements["chat-form"].emit("submit"); await settle();
   assert.equal(retryUploads, 0);
   assert.match(fileRetry.elements.messages.children[0].textContent, /Вложение: <photo>.png/);
@@ -183,7 +188,7 @@ async function main() {
   badFile.elements["chat-files"].emit("change"); await settle();
   assert.match(badFile.elements["attachment-list"].children[0].textContent, /Неверный формат/);
   assert(badFile.elements["btn-send"].disabled);
-  badFile.elements["attachment-list"].children[0].children[0].emit("click");
+  lastChild(badFile.elements["attachment-list"].children[0]).emit("click");
   assert(!badFile.elements["btn-send"].disabled);
   let artifactPage = 0;
   const downloadable = {artifact_id: "artifact-1", file_name: "<result>.gcode", kind: "gcode", size_bytes: 123,
@@ -248,7 +253,7 @@ async function main() {
   assert.match(operations.elements["slice-state"].textContent, /1 ч 2 мин 3 с/);
   assert.match(operations.elements["export-state"].textContent, /Завершено/);
   assert.equal(operations.elements.artifacts.children[0].children[0].href, downloadable.download_url);
-  assert(!operations.requests.some(r => r.options && r.options.method === "POST"), "Background UI does not initiate LLM/tools/mutations");
+  assert(!operations.requests.some(r => r.options && r.options.method === "POST" && !readOnlyRpc(r)), "Background UI does not initiate LLM/tools/mutations");
 
   const stopped = {state: "stopped", error: {code: "observation_interrupted", message: "<read failed>"}};
   operationSnapshot.slice = Object.assign({}, operationSnapshot.slice, {observation: stopped});
@@ -321,7 +326,7 @@ async function main() {
   assert.match(visibleText(correctedRows[1]), /подтверждённое значение 0,12/);
   assert.match(nodes(correctedRows[1], "details")[0].textContent, /"value": 0.12/);
   assert.equal(correctedRows[1].className, "tool-card ok");
-  assert(!correctionApp.requests.some(r => r.options && r.options.method === "POST"), "UI never retries the rejected mutation");
+  assert(!correctionApp.requests.some(r => r.options && r.options.method === "POST" && !readOnlyRpc(r)), "UI never retries the rejected mutation");
   const mdText = "**Готово** и *важно*, `layer_height`.\nВторая строка.\n\n- первый\n- второй\n\n1. шаг\n2. шаг\n\n```json\n{\"text\":\"**буквально** <img onerror=x>\"}\n```\n[Справка](https://example.invalid/guide)";
   const mdSnapshot = Object.assign(idle(), {last_event_id: 1, messages: [{message_id: "md", role: "assistant", text: mdText, event_id: 1}]});
   let mdPage = 0;
@@ -360,7 +365,7 @@ async function main() {
   assert.match(hostileApp.elements.messages.textContent, /<script>alert\(1\)<\/script>/);
   assert.match(hostileApp.elements.messages.textContent, /!\[фото\]/);
   assert.equal(nodes(hostileApp.elements.messages.children[1], "strong").length, 0, "User text is not parsed as Markdown");
-  assert(hostileApp.requests.every(r => r.path.startsWith("/api/")), "Markdown images trigger no external fetches");
+  assert(hostileApp.requests.every(r => r.path.startsWith("/api/") || readOnlyRpc(r)), "Markdown images trigger no external fetches");
 
   function toolSnapshot(fixtures) {
     const result = idle(); let id = 0;
@@ -470,7 +475,7 @@ async function main() {
   assert.equal(pageDetails.open, false);
   assert.match(pageDetails.textContent, /Source label 6/);
   assert.equal(nodes(pageApp.elements.messages, "img").length, 0);
-  assert(!pageApp.requests.some(r => r.options && r.options.method === "POST"), "UI does not fetch all pages through LLM");
+  assert(!pageApp.requests.some(r => r.options && r.options.method === "POST" && !readOnlyRpc(r)), "UI does not fetch all pages through LLM");
   const savedA = Object.assign(idle(), {session_id: "archive-a", process_id: "epoch-one", title: "Кронштейн <img> " + "длинное".repeat(15), restored: true,
     persistence: {state: "saved", saved_revision: 3}, messages: [{message_id: "ha", role: "user", text: "Кронштейн PETG", historical: true,
       attachments: [{name: "photo.png", expired: true}], event_id: 1}], last_event_id: 1});
@@ -541,7 +546,7 @@ async function main() {
   busyHistory.elements["chat-list"].children[1].emit("click");
   busyHistory.elements["btn-delete-session"].emit("click");
   await settle();
-  assert(!busyHistory.requests.some(r => r.options && r.options.method !== "GET"));
+  assert(!busyHistory.requests.some(r => r.options && r.options.method !== "GET" && !readOnlyRpc(r)));
   assert.match(busyHistory.elements.messages.textContent, /PETG/, "Readonly snapshot still displayed during busy");
 
   const expiredStorage = new Map([["ste_ai_session_id", "archive-a"], ["ste_ai_pending", JSON.stringify({session_id: "archive-a", process_id: "old-process", text: "OLD PENDING", client_message_id: "old-id", attachment_ids: ["old-file"]})]]);
@@ -550,7 +555,7 @@ async function main() {
   await settle();
   assert(!expiredStorage.has("ste_ai_pending"));
   assert.match(expiredPendingApp.elements.messages.textContent, /автоматически не повторялась/);
-  assert(!expiredPendingApp.requests.some(r => r.options && r.options.method === "POST"));
+  assert(!expiredPendingApp.requests.some(r => r.options && r.options.method === "POST" && !readOnlyRpc(r)));
 
   const saveStateApp = harness(path => ({code: 200, body: path === "/api/status" ? historyStatus : path === "/api/sessions" ?
     {ready: true, persistent: true, sessions: [savedA]} : path.startsWith("/api/events") ?
@@ -574,7 +579,7 @@ async function main() {
   for (let i = 0; i < 10; i++) { reopenedTab.tick(); await settle(); }
   assert(!reopenedTab.elements.messages.textContent.includes("Old live card"));
   assert.match(reopenedTab.elements.messages.textContent, /Из сохранённой истории/);
-  assert(!reopenedTab.requests.some(r => r.options && r.options.method === "POST"));
+  assert(!reopenedTab.requests.some(r => r.options && r.options.method === "POST" && !readOnlyRpc(r)));
   const historyErrors = harness((path, options) => {
     if (path === "/api/status") return {code: 200, body: historyStatus};
     if (path === "/api/sessions") return {code: 200, body: {ready: true, persistent: true, sessions: [savedA, savedB], error: "Повреждённый файл сохранён"}};
@@ -603,7 +608,55 @@ async function main() {
   epochPolling.tick(); await settle();
   assert(!epochPolling.elements.messages.textContent.includes("Old poll card"), "Polling epoch detects restart without waiting for status or cursor mismatch");
   assert.match(epochPolling.elements.messages.textContent, /Из сохранённой истории/);
-  assert(!epochPolling.requests.some(r => r.options && r.options.method === "POST"));
-  console.log("Agent web contract: 30 scenarios OK (22 preserved + 8 saved-dialog scenarios; offline DOM).");
+  assert(!epochPolling.requests.some(r => r.options && r.options.method === "POST" && !readOnlyRpc(r)));
+  // Scene panel: live IDs, JSON numbers, honest failures (MCP is faked; no STE).
+  const rpcCalls = [];
+  let sceneModels = [{object_id: "model-7", name: "bracket.stl", is_group: false, bounds: {size: {x: 10, y: 20, z: 30}, unit: "mm"}}];
+  let rotateResult = {ok: false, error: {code: "model_transform_unsupported", message: "Закройте G-code preview"}};
+  const rpcReply = value => ({code: 200, body: {jsonrpc: "2.0", id: 1, result: {content: [{type: "text", text: JSON.stringify(value)}], isError: !value.ok}}});
+  const sceneApp = harness((path, options) => {
+    if (path === "/api/status") return {code: 200, body: status};
+    if (path === "/mcp") {
+      const params = JSON.parse(options.body).params;
+      rpcCalls.push(params);
+      if (params.name === "list_models") return rpcReply({ok: true, data: {models: sceneModels}});
+      if (params.name === "get_model_state") return rpcReply({ok: true, data: {object_id: params.arguments.object_id, position_mm: {x: 1, y: 0, z: 2}, outside_build_area: false}});
+      if (params.name === "rotate_model") return rpcReply(rotateResult);
+      if (params.name === "move_model") return rpcReply({ok: true, data: {object_id: "model-7", changed: true, warnings: [],
+        before: {position_mm: {x: 1, y: 0, z: 2}}, after: {position_mm: {x: 0.12, y: 0, z: -3}, bounds: {size: {x: 10, y: 20, z: 30}, unit: "mm"}}}});
+    }
+    return {code: 200, body: idle()};
+  });
+  await settle();
+  assert.match(sceneApp.elements["scene-status"].textContent, /Объектов в сцене: 1/);
+  assert.equal(sceneApp.elements["move-x"].value, "1", "Position is prefilled from a live readback");
+  field(sceneApp, "rot-axis").value = "z";
+  field(sceneApp, "rot-angle").value = "";
+  sceneApp.elements["btn-rotate"].emit("click"); await settle();
+  assert(!rpcCalls.some(c => c.name === "rotate_model"), "Empty angle is not sent as 0");
+  assert.match(sceneApp.elements["scene-result"].textContent, /поле пустое/);
+  for (const bad of ["15deg", "1e400", "NaN", "true"]) {
+    field(sceneApp, "rot-angle").value = bad;
+    sceneApp.elements["btn-rotate"].emit("click"); await settle();
+  }
+  assert(!rpcCalls.some(c => c.name === "rotate_model"), "Units, non-finite and booleans are rejected locally");
+  field(sceneApp, "rot-angle").value = "15";
+  sceneApp.elements["btn-rotate"].emit("click"); await settle();
+  const rotate = rpcCalls.find(c => c.name === "rotate_model");
+  assert.deepEqual(rotate.arguments, {object_id: "model-7", axis: "z", angle_degrees: 15});
+  assert.equal(typeof rotate.arguments.angle_degrees, "number");
+  assert.equal(sceneApp.elements["scene-result"].className, "scene-result fail", "Backend refusal is never a green card");
+  assert.match(sceneApp.elements["scene-result"].textContent, /не выполнено или не подтверждено.*preview/);
+  sceneApp.elements["move-x"].value = "0,12"; field(sceneApp, "move-z").value = "-3";
+  sceneApp.elements["btn-move"].emit("click"); await settle();
+  const move = rpcCalls.find(c => c.name === "move_model");
+  assert.deepEqual(move.arguments.position_mm, {x: 0.12, y: 0, z: -3});
+  assert.equal(sceneApp.elements["scene-result"].className, "scene-result ok");
+  assert.match(sceneApp.elements["scene-result"].textContent, /подтверждено чтением.*устаревшими/);
+  sceneModels = [];
+  sceneApp.elements["btn-scene-refresh"].emit("click"); await settle();
+  assert.match(sceneApp.elements["scene-status"].textContent, /больше не существует/, "A vanished ID is dropped, never reused");
+  assert(sceneApp.elements["btn-rotate"].disabled);
+  console.log("Agent web contract: 31 scenarios OK (22 preserved + 8 saved-dialog + scene controls; offline DOM).");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

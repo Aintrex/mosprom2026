@@ -9,7 +9,7 @@ from unittest import mock
 import test_slicer_exports as exports
 import test_slicer_slicing as slicing
 from test_agent_integration import CONFIG, ScriptedLLM, calls, tool
-from AIAssistant.agent.service import AgentService
+from AIAssistant.agent.service import AgentService, MAX_LLM_STEPS
 from AIAssistant.agent.llm import LLMError
 
 
@@ -87,13 +87,13 @@ class OperationEventsTests(unittest.TestCase):
         self.assertEqual(len(self.llm.requests), 2)
 
     def test_llm_step_limit_does_not_stop_observer_or_increase_eight_requests(self):
-        answers = [calls(tool("get_slicer_state", call_id="read-" + str(i))) for i in range(7)]
+        answers = [calls(tool("get_slicer_state", call_id="read-" + str(i))) for i in range(MAX_LLM_STEPS - 1)]
         snapshot = self.launch_slice(*answers)
         self.assertTrue(snapshot["messages"][-1]["is_error"])
-        self.assertEqual(len(self.llm.requests), 8)
+        self.assertEqual(len(self.llm.requests), MAX_LLM_STEPS)
         self.finish_native()
         self.assertEqual(self.poll()["slice"]["state"], "completed")
-        self.assertEqual(len(self.llm.requests), 8)
+        self.assertEqual(len(self.llm.requests), MAX_LLM_STEPS)
 
     def test_export_both_native_files_become_download_ready_after_idle(self):
         for name in ("export_gcode", "save_project_3mf"):

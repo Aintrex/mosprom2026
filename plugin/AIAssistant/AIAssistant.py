@@ -39,6 +39,13 @@ class AIAssistant(Extension):
     def showChat(self):
         if self._closed:
             return
+        try:
+            self._config.snapshot()
+        except Exception:
+            try:
+                self._config.load()  # Startup read may have failed; retry on explicit open.
+            except Exception as exc:
+                logging.getLogger(__name__).error("LLM Preferences reload: %s", type(exc).__name__)
         if self._server is None:
             self._server = create_server(self._service)
             thread = threading.Thread(target=self._server.serve_forever)
@@ -95,6 +102,8 @@ class AIAssistant(Extension):
         dialog.windowHandle().setTransientParent(app.getMainWindow())
         layout, form = QVBoxLayout(dialog), QFormLayout()
         url, model, key = QLineEdit(config["base_url"]), QLineEdit(config["model"]), QLineEdit("")
+        url.setPlaceholderText("https://<provider>/v1 (OpenAI-совместимый)")
+        model.setPlaceholderText("Имя модели провайдера")
         key.setEchoMode(QLineEdit.Password)
         key.setPlaceholderText("Пусто — не менять сохранённый ключ" if config["api_key"] else "Введите ключ")
         clear = QCheckBox("Удалить сохранённый ключ")

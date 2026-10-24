@@ -35,7 +35,8 @@ def create_server(service, port=0):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+            # blob: only for previews of files the user picked locally; never remote images.
+            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' blob:; frame-ancestors 'none'")
             self.end_headers()
             self.wfile.write(body)
 
@@ -58,7 +59,7 @@ def create_server(service, port=0):
                     return
                 self.download_file(path.split("/")[3])
             elif path == "/api/health":
-                self.respond(200, {"status": "ok", "mode": "scaffold"})
+                self.respond(200, {"status": "ok", "mode": "plugin"})
             elif path in ("/api/status", "/api/events", "/api/sessions") or path.startswith("/api/sessions/"):
                 try:
                     if service.closed:
@@ -160,7 +161,7 @@ def create_server(service, port=0):
                     self.api_error(APIError(500, "internal_error", "Не удалось обработать запрос"))
                 return
             if path == "/mcp":
-                result = dispatch(data, service.tools)
+                result = dispatch(data, service.mcp_tools)
                 if result is None:
                     self.respond(204, b"")
                 else:

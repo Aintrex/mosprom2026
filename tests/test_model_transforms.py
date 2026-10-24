@@ -455,14 +455,23 @@ class TransformTests(unittest.TestCase):
         self.assert_error(self.adapter.get_model_state(self.object_id), "model_transform_unsupported")
         self.assertEqual(self.ops.operations, [])
 
-    def test_native_physics_enabled_or_unknown_rejected_no_preferences_write(self):
-        for key in self.physics:
-            for value in (True, None):
-                self.physics[key] = value
-                self.assert_error(self.adapter.move_model(self.object_id, {"x": 5, "y": 20, "z": 5}), "model_transform_unsupported")
-                self.assertEqual(self.physics[key], value)
-            self.physics[key] = False
+    def test_push_free_enabled_or_unknown_rejected_no_preferences_write(self):
+        key = "physics/automatic_push_free"
+        for value in (True, None):
+            self.physics[key] = value
+            self.assert_error(self.adapter.move_model(self.object_id, {"x": 5, "y": 20, "z": 5}), "model_transform_unsupported")
+            self.assertEqual(self.physics[key], value)
+        self.physics[key] = False
         self.assertEqual(self.ops.operations, [])
+
+    def test_default_drop_down_allows_rotation_with_warning(self):
+        # STE default: drop_down on. The native op is confirmed; physics re-seating is reported.
+        self.physics["physics/automatic_drop_down"] = True
+        response = self.adapter.rotate_model(self.object_id, "x", 90)
+        self.assertTrue(response["ok"], response)
+        self.assertTrue(response["data"]["changed"])
+        self.assertTrue(any("опускание" in w for w in response["data"]["warnings"]))
+        self.assertEqual(self.physics["physics/automatic_drop_down"], True)
 
     def test_outside_is_warning_not_printability_and_unknown_remains_null(self):
         response = self.adapter.move_model(self.object_id, {"x": 200, "y": 0, "z": 0})

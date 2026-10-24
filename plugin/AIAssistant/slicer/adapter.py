@@ -25,7 +25,7 @@ _UNSET = object()
 
 
 class SlicerAdapter(object):
-    def __init__(self, app=None, timeout=5.0, load_timeout=10.0, slicing_timeout=180.0, export_timeout=120.0, arrangement_timeout=120.0):
+    def __init__(self, app=None, timeout=5.0, load_timeout=60.0, slicing_timeout=180.0, export_timeout=120.0, arrangement_timeout=120.0):
         # Constructed by Extension on the Qt thread; dev mode has no app.
         self._bridge = QtBridge(app, timeout) if app is not None else None
         self._timeout = timeout
@@ -279,7 +279,7 @@ class SlicerAdapter(object):
                 bridge.ensure_open()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise SlicerError("model_load_timeout", "Импорт запущен, но завершение за 10 секунд не подтверждено. Штатный job не отменён и может добавить модель позже.")
+                    raise SlicerError("model_load_timeout", "Импорт запущен, но завершение за %d секунд не подтверждено." % self._load_timeout + " Штатный job не отменён и может добавить модель позже.")
                 result = bridge.run(operation.check, timeout=min(self._timeout, remaining))
                 if result is not None:
                     return result

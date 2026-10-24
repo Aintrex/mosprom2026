@@ -41,16 +41,16 @@ class TimeoutDiagnosticsTests(unittest.TestCase):
         self.agent.clock = lambda: self.now
         self.send()
         values, message = self.failure_numbers()
-        self.assertEqual(values[:5], [1, 30.125, 30, 120, 0])
+        self.assertEqual(values[:5], [1, 60.125, 60, 300, 0])
         self.assertEqual(len(self.llm.requests), 1)
-        self.assertEqual(self.llm.requests[0][3], 30)
+        self.assertEqual(self.llm.requests[0][3], 60)
         self.assertEqual(self.app.stack.writes, [])
         self.assertEqual(self.results(), [])
         self.assertEqual(self.snapshot()["agent_state"], "idle")
 
     def test_remaining_turn_budget_after_confirmed_write_keeps_result_no_second_write(self):
         def write(client, messages):
-            self.now = 105.0
+            self.now = 285.0
             return integration.calls(integration.tool("set_setting", {"key": "layer_height", "scope": "global", "value": 0.12}))
         self.service(write, self.fail_call)
         self.agent.clock = lambda: self.now
@@ -60,7 +60,7 @@ class TimeoutDiagnosticsTests(unittest.TestCase):
         values, message = self.failure_numbers()
         self.assertEqual(values[:5], [2, 15.125, 15, 15, 1])
         self.assertIn("set_setting", message)
-        self.assertEqual([r[3] for r in self.llm.requests], [30, 15])
+        self.assertEqual([r[3] for r in self.llm.requests], [60, 15])
         self.assertEqual(self.app.stack.writes, [("layer_height", 0.12)])
         self.assertEqual(self.results()[0]["data"]["after"], 0.12)
         self.assertEqual(self.adapter.get_setting("layer_height", "global")["data"]["value"], 0.12)
@@ -72,7 +72,7 @@ class TimeoutDiagnosticsTests(unittest.TestCase):
         self.agent.clock = lambda: self.now
         self.pump_until_done(self.worker(self.send))
         values, message = self.failure_numbers()
-        self.assertEqual(values[:5], [3, 30.125, 30, 120, 0])
+        self.assertEqual(values[:5], [3, 60.125, 60, 300, 0])
         self.assertEqual(len(self.results()), 2)
         self.assertTrue(all(r["ok"] for r in self.results()))
         self.assertEqual(self.app.stack.writes, [])
@@ -83,7 +83,7 @@ class TimeoutDiagnosticsTests(unittest.TestCase):
         self.agent.clock = lambda: self.now
         self.pump_until_done(self.worker(self.send))
         values, message = self.failure_numbers()
-        self.assertEqual(values[:5], [2, 30.125, 30, 120, 1])
+        self.assertEqual(values[:5], [2, 60.125, 60, 300, 1])
         self.assertIn("start_slicing", message)
         self.assertEqual(self.app.backend.calls, 1)
         self.assertTrue(self.app.backend._slicing)

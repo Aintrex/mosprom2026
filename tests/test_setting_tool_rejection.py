@@ -46,14 +46,36 @@ class SettingToolRejectionTests(unittest.TestCase):
         self.assertTrue(any(e["type"] == "tool_started" and e["data"]["tool_call_id"] == "corrected" for e in events))
         return self.results()[0]["error"]
 
-    def test_numeric_string_rejects_before_api_corrected_once_readback(self):
-        error = self.correction({"key": "layer_height", "scope": "global", "value": "0.12"})
-        self.assertEqual(error["arguments_summary"]["field_types"]["value"], "string")
+    def coerced(self, arguments):
+        # LLM-boundary repair: one native write, conversion reported in the result.
+        self.service(integration.calls(integration.tool("set_setting", arguments)), {"content": "Готово"})
+        with mock.patch.object(self.adapter, "set_setting", wraps=self.adapter.set_setting) as native:
+            self.pump_until_done(self.worker(self.send))
+            self.assertEqual(native.call_count, 1)
+        self.assertEqual(self.app.stack.writes, [("layer_height", 0.12)])
+        result = self.results()[0]
+        self.assertTrue(result["ok"], result)
+        return result["argument_coercions"]
 
-    def test_global_extra_null_rejects_before_api_corrected_once_readback(self):
-        error = self.correction({"key": "layer_height", "scope": "global", "value": 0.12, "extruder_id": None})
-        self.assertEqual(error["arguments_summary"]["field_types"]["extruder_id"], "null")
-        self.assertIn("key, scope, value", error["message"])
+    def test_numeric_string_coerced_at_llm_boundary_single_write(self):
+        self.assertIn("value", self.coerced({"key": "layer_height", "scope": "global", "value": "0.12"})[0])
+
+    def test_global_extra_null_dropped_at_llm_boundary_single_write(self):
+        self.assertIn("extruder_id", self.coerced({"key": "layer_height", "scope": "global", "value": 0.12, "extruder_id": None})[0])
+
+    def test_non_numeric_string_still_rejected_before_api(self):
+        for value in ("0.12mm", "1/8", "nan", "inf", "0x1"):
+            error = self.correction({"key": "layer_height", "scope": "global", "value": value})
+            self.assertEqual(error["arguments_summary"]["field_types"]["value"], "string")
+            self.setUp()
+
+    def test_direct_mcp_stays_strict_for_numeric_string(self):
+        from AIAssistant.agent.mcp import dispatch
+        from AIAssistant.agent.tools import ToolRegistry
+        response = dispatch({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "set_setting", "arguments": {"key": "layer_height", "scope": "global", "value": "0.12"}}}, ToolRegistry(self.adapter))
+        self.assertEqual(response["error"]["code"], -32602)
+        self.assertEqual(self.app.stack.writes, [])
 
     def test_missing_scope_rejects_before_api_no_default_corrected_once(self):
         error = self.correction({"key": "layer_height", "value": 0.12})

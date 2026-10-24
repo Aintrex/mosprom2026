@@ -75,7 +75,7 @@ class ChatCompletionsClient(object):
         if not self._lock.acquire(False):
             raise LLMError("request_busy", "Предыдущий сетевой вызов ещё завершается; не повторяйте автоматически")
         self._abandon.clear()
-        timeout = min(30.0, timeout)
+        timeout = min(60.0, timeout)
         deadline = time.monotonic() + timeout
         payload = {"model": config_snapshot["model"], "messages": messages, "stream": False}
         if tools:
