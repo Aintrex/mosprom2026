@@ -272,6 +272,14 @@
     var code = error.code || "", title = "Не удалось выполнить инструмент", next = "Проверьте результат и состояние в STE Slicer. Не повторяйте изменение автоматически.";
     var networkTimeout = code === "network_timeout" || /[сС]етевой (timeout|бюджет)/.test(error.message || "");
     if (rejected) { title = "Отклонено до запуска"; next = "API слайсера не вызывался. Проверьте обязательные поля и тип значения; схема находится в технических деталях."; }
+    else if (error.stage === "preflight" && error.operation_started === false) {
+      title = "Преобразование отклонено до изменения модели";
+      next = "Предварительная проверка не разрешила запуск штатной операции. Проверьте указанную причину и UI; защиты не отключаются автоматически.";
+    }
+    else if (error.stage === "execution" && error.operation_started === true) {
+      title = "Результат преобразования не подтверждён";
+      next = "Вызов штатной операции уже начат. Перечитайте матрицу/сцену и UI; не повторяйте и не отменяйте действие автоматически.";
+    }
     else if (networkTimeout) title = "Ответ языковой модели не получен вовремя";
     else if (code === "slice_result_stale" || code === "artifact_stale" || code === "artifact_changed") title = "Результат неактуален";
     else if (code === "qt_timeout" || code === "execution_error" || code === "tool_result_unconfirmed" || /_timeout$/.test(code)) title = "Исход операции требует проверки";

@@ -104,13 +104,22 @@ class ModelTransforms(object):
     def apply(self, app, name, arguments):
         # Hold the existing lock on Qt through confirmation, even if the worker times out.
         if not self.lock.acquire(False):
-            raise SlicerError("model_operation_busy", "Заняты импорт, нарезка, экспорт или другая запись; чтения доступны")
+            error = SlicerError("model_operation_busy", "Заняты импорт, нарезка, экспорт или другая запись; чтения доступны")
+            error.operation_started, error.operation_stage = False, "preflight"
+            raise error
+        admission = {"started": False}
         try:
-            return self._apply(app, name, arguments)
+            return self._apply(app, name, arguments, admission)
+        except Exception as exc:
+            # Preserve the API exception/traceback; describe dispatch certainty,
+            # not whether a failed native operation managed to change geometry.
+            exc.operation_started = admission["started"]
+            exc.operation_stage = "execution" if admission["started"] else "preflight"
+            raise
         finally:
             self.lock.release()
 
-    def _apply(self, app, name, arguments):
+    def _apply(self, app, name, arguments, admission):
         object_id = arguments["object_id"]
         node = self.registry.resolve(app, object_id)
         context = self._context(app)
@@ -180,8 +189,10 @@ class ModelTransforms(object):
         # Repeat ID/context immediately before the native push; never trust a worker-held node.
         if self._context(app) != context or self.registry.resolve(app, object_id) is not node:
             raise SlicerError("model_transform_unsupported", "Машина, сцена или платформа изменилась до записи")
+        push = app.getOperationStack().push
         try:
-            app.getOperationStack().push(operation)
+            admission["started"] = True
+            push(operation)
         finally:
             # A native redo may have changed geometry before raising; never roll it back silently.
             self.invalidate()

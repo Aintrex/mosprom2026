@@ -1,6 +1,7 @@
 # Local research, downloaded distributions and credentials
 /tmp/
 /vendor/
+/.codex-remote-attachments/
 /data/
 /dist/
 .env

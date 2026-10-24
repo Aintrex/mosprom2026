@@ -358,7 +358,10 @@ class SlicerAdapter(object):
                 message += " Вызовите get_slicer_state: состояние могло измениться. Откат не выполнялся; не повторяйте запись автоматически."
             if worker and exc.code == "slicer_not_connected" and self._bridge is not None:
                 message += " Если переключение уже началось, состояние могло измениться. После подключения вызовите get_slicer_state."
-            return {"ok": False, "error": {"code": exc.code, "message": message}}
+            error = {"code": exc.code, "message": message}
+            if model_transform:
+                error.update(stage=getattr(exc, "operation_stage", "unknown"), operation_started=getattr(exc, "operation_started", None))
+            return {"ok": False, "error": error}
         except Exception as exc:
             # Log traceback frames and type, excluding possibly private API values.
             LOGGER.error("STE settings API: %s\n%s", type(exc).__name__,
@@ -373,4 +376,7 @@ class SlicerAdapter(object):
                 message += " Вызовите list_models. Если job запущен, он может завершиться позже; не повторяйте импорт автоматически."
             if model_transform:
                 message += " Перечитайте get_model_state/list_models и UI; автоматического повтора/отката нет."
-            return {"ok": False, "error": {"code": "slicer_error", "message": message}}
+            error = {"code": "slicer_error", "message": message}
+            if model_transform:
+                error.update(stage=getattr(exc, "operation_stage", "unknown"), operation_started=getattr(exc, "operation_started", None))
+            return {"ok": False, "error": error}

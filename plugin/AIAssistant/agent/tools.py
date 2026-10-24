@@ -1,4 +1,7 @@
 import copy
+import decimal
+import re
+import sys
 
 from ..slicer.adapter import SlicerAdapter, validate_setting_arguments
 from ..slicer.modes import PRINT_MODES, validate_mode_arguments
@@ -6,7 +9,7 @@ from ..slicer.profiles import TOOL_FIELDS, validate_profile_arguments
 from ..slicer.models import MODEL_FIELDS, validate_model_arguments
 from ..slicer.slicing import SLICE_FIELDS, validate_slice_arguments
 from ..slicer.exports import EXPORT_FIELDS, validate_export_arguments
-from ..slicer.settings import SETTING_KEYS, CATEGORIES
+from ..slicer.settings import SETTING_KEYS, SETTING_TYPES, CATEGORIES, finite
 from ..slicer.transforms import TRANSFORM_FIELDS, validate_transform_arguments
 from ..slicer.arrangement import ARRANGEMENT_FIELDS, validate_arrangement_arguments
 from ..uploads import UploadError
@@ -43,6 +46,11 @@ class ToolRegistry(object):
             self._tools.append({"name": name, "description": description,
                                 "inputSchema": {"type": "object", "properties": properties,
                                                 "required": required, "additionalProperties": False}})
+            if name == "set_setting":
+                self._tools[-1]["inputSchema"]["oneOf"] = [
+                    {"properties": {"key": {"enum": [key for key in SETTING_KEYS if SETTING_TYPES[key] == kind]},
+                                    "value": {"type": json_type}}, "required": ["key", "value"]}
+                    for kind, json_type in (("float", "number"), ("int", "integer"), ("bool", "boolean"), ("enum", "string"))]
         self._tools.extend([{
             "name": "get_slicer_state",
             "description": "Прочитать машину, режим и фактический backend STE Slicer; не проверяет готовность движка.",
@@ -143,6 +151,36 @@ class ToolRegistry(object):
     def list_tools(self):
         return copy.deepcopy(self._tools)
 
+    @staticmethod
+    def llm_arguments(name, arguments):
+        """Explicit LLM-boundary repair; MCP/call/Qt never use this method."""
+        if name != "set_setting" or not isinstance(arguments, dict):
+            return arguments, None
+        key, value, scope = arguments.get("key"), arguments.get("value"), arguments.get("scope")
+        kind = SETTING_TYPES.get(key) if isinstance(key, str) else None
+        fields = {"key", "scope", "value"} | ({"extruder_id"} if scope == "extruder" else set())
+        if (kind not in ("float", "int") or not isinstance(value, str) or not 1 <= len(value) <= 64 or
+                scope not in ("global", "extruder") or set(arguments) != fields):
+            return arguments, None
+        pattern = r"\A-?(0|[1-9][0-9]*)\Z" if kind == "int" else r"\A-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?\Z"
+        if not re.match(pattern, value):
+            return arguments, None
+        try:
+            if kind == "int":
+                parsed = int(value)  # No float intermediate or precision loss.
+            else:
+                exact, parsed = decimal.Decimal(value), float(value)
+                if (not exact.is_finite() or not finite(parsed) or
+                        not exact.is_zero() and (parsed == 0 or exact.copy_abs() < decimal.Decimal.from_float(sys.float_info.min))):
+                    return arguments, None
+        except (ValueError, OverflowError, decimal.InvalidOperation):
+            return arguments, None
+        repaired = dict(arguments)
+        repaired["value"] = parsed
+        return repaired, {"field": "value", "from_type": "string", "to_type": "integer" if kind == "int" else "number",
+                          "reason": "strict_json_integer_literal" if kind == "int" else "strict_json_number_literal",
+                          "stage": "llm_boundary"}
+
     def argument_rejection(self, name, arguments, message, argument_format):
         # Type-only diagnostics: no raw values, unknown field names, paths or provider payload.
         schema = next((t["inputSchema"] for t in self._tools if t["name"] == name), None)
@@ -166,6 +204,42 @@ class ToolRegistry(object):
                  "arguments_summary": summary}
         if schema is not None:
             error["expected"] = copy.deepcopy(schema)
+        if isinstance(arguments, dict) and schema:
+            types = {key: field.get("type") for key, field in schema.get("properties", {}).items()}
+            key = arguments.get("key")
+            if name == "set_setting" and isinstance(key, str) and key in SETTING_TYPES:
+                types["value"] = {"float": "number", "int": "integer", "bool": "boolean", "enum": "string"}[SETTING_TYPES[key]]
+                # A concrete repair needs this key/type, not another copy of120 keys.
+                error["expected"]["properties"]["key"]["enum"] = [key]
+                error["expected"]["properties"]["value"]["type"] = types["value"]
+                error["expected"].pop("oneOf", None)
+            issues = []
+            for field, expected in types.items():
+                if field not in arguments:
+                    if field in schema.get("required", []):
+                        issues.append({"field": field, "expected_type": expected, "actual_type": "missing"})
+                elif isinstance(expected, str):
+                    actual = kind(arguments[field])
+                    integer = expected == "integer" and finite(arguments[field]) and int(arguments[field]) == arguments[field]
+                    if actual != expected and not integer:
+                        issues.append({"field": field, "expected_type": expected, "actual_type": actual})
+                    elif expected == "number" and not finite(arguments[field]):
+                        issues.append({"field": field, "expected_type": expected, "actual_type": actual, "constraint": "finite"})
+                    allowed = schema["properties"][field].get("enum")
+                    if allowed is not None and arguments[field] not in allowed:
+                        issue = {"field": field, "expected_type": expected, "actual_type": actual, "constraint": "enum"}
+                        if len(allowed) <= 10:
+                            issue["allowed_values"] = list(allowed)
+                        issues.append(issue)
+            # Nested transform vectors use the very same schema, never guessed values.
+            for vector in ("position_mm", "factors"):
+                if isinstance(arguments.get(vector), dict):
+                    for axis in ("x", "y", "z"):
+                        value = arguments[vector].get(axis)
+                        if not finite(value):
+                            issues.append({"field": vector + "." + axis, "expected_type": "number", "actual_type": kind(value) if axis in arguments[vector] else "missing"})
+            if issues:
+                error["field_errors"] = issues
         return {"ok": False, "error": error}
 
     def validate(self, name, arguments):

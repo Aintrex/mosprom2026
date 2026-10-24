@@ -46,8 +46,10 @@ class SettingToolRejectionTests(unittest.TestCase):
         self.assertTrue(any(e["type"] == "tool_started" and e["data"]["tool_call_id"] == "corrected" for e in events))
         return self.results()[0]["error"]
 
-    def test_numeric_string_rejects_before_api_corrected_once_readback(self):
-        error = self.correction({"key": "layer_height", "scope": "global", "value": "0.12"})
+    def test_unit_string_rejects_before_api_corrected_once_readback(self):
+        # Pure numeric LLM strings now have the explicitly approved repair path;
+        # units remain invalid and require a corrected call, never inference.
+        error = self.correction({"key": "layer_height", "scope": "global", "value": "0.12 mm"})
         self.assertEqual(error["arguments_summary"]["field_types"]["value"], "string")
 
     def test_global_extra_null_rejects_before_api_corrected_once_readback(self):
@@ -93,7 +95,7 @@ class SettingToolRejectionTests(unittest.TestCase):
         self.assertNotIn("private post-native", json.dumps(self.snapshot()))
 
     def test_validation_corrections_still_use_existing_step_limit(self):
-        self.service(*[integration.calls(integration.tool("set_setting", {"key": "layer_height", "value": 0.12}, "bad-" + str(i)))
+        self.service(*[integration.calls(integration.tool("set_setting", {"key": "layer_height", "value": 0.12 + i * 0.01}, "bad-" + str(i)))
                        for i in range(MAX_LLM_STEPS)])
         self.send()
         self.assertEqual(len(self.llm.requests), MAX_LLM_STEPS)
