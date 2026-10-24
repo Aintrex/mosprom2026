@@ -46,7 +46,15 @@
   function post(path, data) {
     return api(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(data)});
   }
+  function autosize() {
+    // Grow the one-line composer with its content; CSS max-height caps it, then it scrolls.
+    if (!elInput.style || typeof elInput.scrollHeight !== "number") return;
+    elInput.style.height = "40px";
+    elInput.style.height = Math.max(40, elInput.scrollHeight) + "px";
+    elInput.className = elInput.scrollHeight > elInput.clientHeight + 1 ? "scrolls" : "";
+  }
   function buttons() {
+    autosize();
     var busy = globalBusy || sessionBusy || operationBusy || switching;
     elSend.disabled = busy || !sessionId || uploading || selected.some(function (item) { return !!item.error; });
     elSend.textContent = pending ? "Повторить попытку" : "Отправить";
@@ -899,6 +907,7 @@
 
   document.getElementById("chat-form").addEventListener("submit", function (event) { event.preventDefault(); send(elInput.value); });
   elFiles.addEventListener("change", chooseFiles);
+  elInput.addEventListener("input", autosize);
   elInput.addEventListener("keydown", function (event) {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); if (!elSend.disabled) send(elInput.value); }
   });
