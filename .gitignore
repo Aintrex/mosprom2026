@@ -20,6 +20,7 @@ venv/
 *.log
 .DS_Store
 Thumbs.db
+~$*.docx
 
 # Large inputs: keep organizer models outside Git
 *.mp4

@@ -146,7 +146,7 @@ class Information(object):
 
 class Backend(mode_tests.Backend):
     def __init__(self, app):
-        super().__init__(app, "real-classic-registration")
+        super().__init__(app, "CuraEngineBackend")
         for name in ("slicingStarted", "slicingCancelled", "backendStateChange", "processingProgress",
                      "backendError", "backendQuit", "printDurationMessage"):
             setattr(self, name, Signal(app))
@@ -387,7 +387,7 @@ class SlicingTests(unittest.TestCase):
         self.assertAlmostEqual(result["material"]["length_mm"], 1270.0)
         self.assertEqual(result["material"]["weight_g"], 3.6)
         self.assertEqual(result["source"], "ste_slicer")
-        self.assertEqual(result["backend_id"], "real-classic-registration")
+        self.assertEqual(result["backend_id"], "CuraEngineBackend")
         json.dumps(result, allow_nan=False)
         result["material"]["weight_g"] = -1
         self.assertEqual(self.adapter.get_slicing_result(self.slice_id)["data"]["material"]["weight_g"], 3.6)

@@ -3,10 +3,12 @@ import os
 import logging
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import urlsplit, parse_qs, quote
 
 from .agent.mcp import dispatch, error
 from .agent.service import APIError
+from .uploads import UploadError
+from .downloads import DownloadError
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 STATIC_FILES = {"/": ("index.html", "text/html; charset=utf-8"),
@@ -50,7 +52,12 @@ def create_server(service, port=0):
                 return
             parsed = urlsplit(self.path)
             path = parsed.path
-            if path == "/api/health":
+            if path.startswith("/api/files/"):
+                if parsed.query or parsed.fragment or len(path.split("/")) != 4:
+                    self.api_error(APIError(404, "not_found", "Маршрут скачивания не найден"))
+                    return
+                self.download_file(path.split("/")[3])
+            elif path == "/api/health":
                 self.respond(200, {"status": "ok", "mode": "scaffold"})
             elif path == "/api/status" or path == "/api/events" or path.startswith("/api/sessions/"):
                 try:
@@ -91,6 +98,9 @@ def create_server(service, port=0):
                 return
             parsed = urlsplit(self.path)
             path, parts = parsed.path, parsed.path.split("/")
+            if path == "/api/files" and not parsed.query:
+                self.upload_file()
+                return
             rest = path == "/api/sessions" or (len(parts) == 5 and parts[:3] == ["", "api", "sessions"] and parts[4] == "messages")
             if parsed.query or path not in ("/api/message", "/mcp") and not rest:
                 self.not_found()
@@ -143,6 +153,64 @@ def create_server(service, port=0):
 
         def api_error(self, exc):
             self.respond(exc.status, {"error": {"code": exc.code, "message": exc.message}})
+
+        def download_file(self, file_id):
+            stream, started = None, False
+            self.close_connection = True
+            try:
+                if service.closed:
+                    raise APIError(503, "service_stopped", "Сервис закрывается")
+                stream, artifact = service.open_download(file_id)
+                self.send_response(200)
+                self.send_header("Content-Type", "model/3mf" if artifact["kind"] == "project" else "application/octet-stream")
+                self.send_header("Content-Length", str(artifact["size_bytes"]))
+                name = quote(artifact["file_name"], safe="")
+                self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + name)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
+                started = True
+                self.end_headers()
+                remaining = artifact["size_bytes"]
+                while remaining:
+                    chunk = stream.read(min(65536, remaining))
+                    if not chunk:
+                        raise OSError("Published file became truncated")
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+            except (APIError, DownloadError) as exc:
+                if not started:
+                    self.api_error(exc)
+            except (OSError, ValueError) as exc:
+                logging.getLogger(__name__).info("Download interrupted: %s", type(exc).__name__)
+                if not started:
+                    self.api_error(APIError(503, "download_unavailable", "Не удалось начать скачивание"))
+            except Exception as exc:
+                logging.getLogger(__name__).error("Download: %s", type(exc).__name__)
+                if not started:
+                    self.api_error(APIError(503, "download_unavailable", "Скачивание не подтверждено"))
+            finally:
+                if stream is not None:
+                    stream.close()
+
+        def upload_file(self):
+            self.close_connection = True
+            try:
+                if service.closed:
+                    raise APIError(503, "service_stopped", "Плагин завершает работу")
+                lengths = self.headers.get_all("Content-Length", [])
+                if (self.headers.get("Transfer-Encoding") is not None or len(lengths) != 1 or
+                        not lengths[0] or any(c not in "0123456789" for c in lengths[0]) or len(lengths[0]) > 12):
+                    raise APIError(400, "invalid_upload", "Нужен один Content-Length, chunked не поддерживается")
+                if len(self.headers.get_all("Content-Type", [])) != 1:
+                    raise APIError(415, "unsupported_media_type", "Нужен один multipart/form-data Content-Type")
+                result = service.file_store.upload(self.rfile, int(lengths[0]), self.headers["Content-Type"])
+                self.respond(201, result)
+            except (APIError, UploadError) as exc:
+                self.api_error(exc)
+            except Exception as exc:
+                logging.getLogger(__name__).error("Upload handler: %s", type(exc).__name__)
+                self.api_error(APIError(500, "upload_failed", "Не удалось обработать вложение"))
 
         def new_api(self):
             path = urlsplit(self.path).path

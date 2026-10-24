@@ -349,7 +349,7 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, "message_id_conflict")
         with self.assertRaises(APIError) as caught:
             self.agent.submit_message(self.sid, {"text": "file", "client_message_id": "new", "attachment_ids": ["file-1"]})
-        self.assertEqual(caught.exception.code, "attachments_unavailable")
+        self.assertEqual(caught.exception.code, "file_not_found")
 
     def test_one_active_turn_global_close_rejects_late_answer_and_tools(self):
         entered, release, done = threading.Event(), threading.Event(), threading.Event()
@@ -535,7 +535,7 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertFalse(status["slicer"]["connected"])
         self.assertTrue(status["llm"]["configured"])
-        self.assertFalse(status["capabilities"]["attachments"])
+        self.assertTrue(status["capabilities"]["attachments"])
         self.assertFalse(status["capabilities"]["background_slice_events"])
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")

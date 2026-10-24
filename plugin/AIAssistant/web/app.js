@@ -5,6 +5,9 @@
   var elMessages = document.getElementById("messages"), elInput = document.getElementById("chat-input");
   var elSend = document.getElementById("btn-send"), elState = document.getElementById("agent-state-text");
   var elNew = document.getElementById("btn-new-session");
+  var elFiles = document.getElementById("chat-files"), elAttachments = document.getElementById("attachment-list");
+  var selected = [], uploading = false;
+  var elArtifacts = document.getElementById("artifacts"), artifacts = Object.create(null);
 
   function read(key) {
     try { return localStorage.getItem(key); } catch (err) { return null; }
@@ -34,9 +37,55 @@
     return api(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(data)});
   }
   function buttons() {
-    elSend.disabled = globalBusy || sessionBusy || !sessionId;
+    elSend.disabled = globalBusy || sessionBusy || !sessionId || uploading || selected.some(function (item) { return !!item.error; });
     elSend.textContent = pending ? "Повторить попытку" : "Отправить";
-    elNew.disabled = globalBusy || sessionBusy || !!pending;
+    elNew.disabled = globalBusy || sessionBusy || !!pending || uploading;
+    elFiles.disabled = globalBusy || sessionBusy || !!pending || uploading || !sessionId;
+  }
+  function attachmentList() {
+    while (elAttachments.firstChild) elAttachments.removeChild(elAttachments.firstChild);
+    var entries = pending ? (pending.attachments || (pending.attachment_ids || []).map(function (id) { return {name: id}; })) : selected;
+    entries.forEach(function (item) {
+      var row = document.createElement("div");
+      row.textContent = item.name + (item.error ? " — " + item.error : item.file_id || pending ? " — загружен" : " — загрузка...");
+      if (!pending) {
+        var remove = document.createElement("button");
+        remove.type = "button"; remove.textContent = "Убрать"; remove.disabled = uploading;
+        remove.addEventListener("click", function () {
+          if (uploading || pending) return;
+          selected = selected.filter(function (entry) { return entry !== item; });
+          attachmentList(); buttons();
+        });
+        row.appendChild(remove);
+      }
+      elAttachments.appendChild(row);
+    });
+  }
+  function chooseFiles() {
+    if (elFiles.disabled) return;
+    var files = Array.prototype.slice.call(elFiles.files || []);
+    elFiles.value = "";
+    if (selected.length + files.length > 5) { errorMessage("Допускается до 5 вложений."); return; }
+    var imageBytes = selected.filter(function (item) { return item.kind === "image"; }).reduce(function (sum, item) { return sum + item.size_bytes; }, 0);
+    var items = files.map(function (file) {
+      var image = /\.(jpg|jpeg|png)$/i.test(file.name);
+      imageBytes += image ? file.size : 0;
+      return {name: file.name, size_bytes: file.size, kind: image ? "image" : "model", file: file};
+    });
+    if (imageBytes > 10 * 1024 * 1024) { errorMessage("Изображения сообщения превышают 10 MiB."); return; }
+    if (!items.length) return;
+    selected = selected.concat(items); uploading = true; attachmentList(); buttons();
+    var chain = Promise.resolve();
+    items.forEach(function (item) {
+      chain = chain.then(function () {
+        var form = new FormData(); form.append("file", item.file);
+        return api("/api/files", {method: "POST", body: form}).then(function (metadata) {
+          delete item.file;
+          Object.keys(metadata).forEach(function (key) { item[key] = metadata[key]; });
+        }).catch(function (err) { delete item.file; item.error = err.message; }).then(attachmentList);
+      });
+    });
+    chain.then(function () { uploading = false; attachmentList(); buttons(); });
   }
   function errorMessage(text) {
     var div = document.createElement("div");
@@ -49,6 +98,7 @@
     var div = document.createElement("div");
     div.className = "msg " + (message.is_error ? "error" : message.role);
     div.textContent = message.text;
+    (message.attachments || []).forEach(function (item) { div.textContent += "\nВложение: " + item.name; });
     elMessages.appendChild(div);
   }
   function renderTool(kind, data) {
@@ -58,24 +108,61 @@
       var card = document.createElement("div"), head = document.createElement("div"), body = document.createElement("div");
       card.className = "tool-card"; head.className = "tool-head"; body.className = "tool-body";
       card.appendChild(head); card.appendChild(body); elMessages.appendChild(card);
-      item = cards[key] = {card: card, head: head, body: body, arguments: null};
+      item = cards[key] = {card: card, head: head, body: body, started: false};
     }
-    if (kind === "tool_started") item.arguments = data.arguments;
+    if (kind === "tool_started") { item.arguments = data.arguments; item.started = true; }
     var finished = kind === "tool_finished";
+    var error = finished && data.result && data.result.error;
+    var rejected = !item.started && error && error.code === "invalid_tool_arguments" &&
+      error.stage === "validation" && error.executed === false;
     item.card.className = "tool-card " + (finished ? (data.result.ok ? "ok" : "fail") : "");
-    item.head.textContent = (finished ? "Результат/отказ: " : "Вызов: ") + data.name;
-    item.body.textContent = "Аргументы: " + JSON.stringify(item.arguments) +
+    item.head.textContent = (rejected ? "Отклонено до запуска: " : finished ? "Результат/отказ: " : "Вызов: ") + data.name;
+    item.body.textContent = (item.started ? "Аргументы: " + JSON.stringify(item.arguments) :
+      rejected ? "Аргументы не переданы API: отказ проверки до запуска." : "Аргументы не опубликованы; запуск API не подтверждён этой карточкой.") +
       (finished ? "\nРезультат: " + JSON.stringify(data.result) : "");
   }
   function renderSlice(slice) {
     lastSlice = slice;
     var target = document.getElementById("slice-state");
     if (!slice) { target.textContent = "Снимков нарезки ещё нет."; return; }
-    target.textContent = "Последний снимок из tools (не автообновление): " + slice.slice_id + ", " + slice.state +
+    target.textContent = "Последний снимок: " + slice.slice_id + ", " + slice.state +
       (slice.progress === null || slice.progress === undefined ? "" : ", progress=" + slice.progress) +
       (slice.state === "completed" ? (slice.valid ? ", актуален в момент чтения" : ", УСТАРЕЛ / актуальность не подтверждена") : "") +
       (slice.error ? ", ошибка: " + slice.error.message : "") +
-      ". Завершение ответа агента не подтверждает завершение engine; запросите свежий статус.";
+      ". " + observationText(slice.observation);
+    if (slice.result) target.textContent += " Оценки STE: " + JSON.stringify(slice.result);
+  }
+  function observationText(observation) {
+    if (!observation) return "Снимок из tools; автонаблюдение этого запуска не подтверждено.";
+    if (observation.state === "watching") return "Свой запуск обновляется автоматически без запросов LLM; idle относится к ответу агента.";
+    if (observation.state === "stopped") return "Наблюдение прервано: " + (observation.error && observation.error.message || "проверьте UI") + "; engine мог продолжиться.";
+    return "Наблюдение завершено; дальнейшие ручные изменения проверяются при чтении/скачивании.";
+  }
+  function renderExport(value) {
+    var target = document.getElementById("export-state");
+    if (!value) { target.textContent = "Своих экспортов ещё нет."; return; }
+    target.textContent = "Экспорт " + value.export_id + " (" + value.kind + "): " + value.state +
+      (value.progress === null || value.progress === undefined ? "" : ", progress=" + value.progress) +
+      (value.state === "completed" && !value.valid ? ", УСТАРЕЛ / актуальность не подтверждена" : "") +
+      (value.error ? ", ошибка: " + value.error.message : "") + ". " + observationText(value.observation);
+  }
+  function renderArtifact(artifact) {
+    if (!artifact || typeof artifact.artifact_id !== "string") return;
+    var row = artifacts[artifact.artifact_id];
+    if (!row) {
+      row = document.createElement("div");
+      artifacts[artifact.artifact_id] = row; elArtifacts.appendChild(row);
+    }
+    while (row.firstChild) row.removeChild(row.firstChild);
+    row.textContent = artifact.file_name + " (" + artifact.kind + ", " + artifact.size_bytes + " байт) — " + artifact.slice_id;
+    if (artifact.valid === true && typeof artifact.download_url === "string" &&
+        /^\/api\/files\/[A-Za-z0-9_-]{1,128}$/.test(artifact.download_url)) {
+      var link = document.createElement("a");
+      link.textContent = " Скачать"; link.href = artifact.download_url;
+      link.target = "_blank"; link.rel = "noopener";
+      row.appendChild(link);
+    } else row.textContent += artifact.valid === false ? " — устарел / недоступен" : " — локальный результат, скачивание не подтверждено";
+    if (artifact.download_error) row.textContent += " — " + artifact.download_error.message;
   }
   function applyEvent(event) {
     var data = event.data || {};
@@ -89,12 +176,17 @@
     else if (event.type === "tool_started" || event.type === "tool_finished") renderTool(event.type, data);
     else if (event.type === "slice_progress") renderSlice(data);
     else if (event.type === "slice_finished") renderSlice(data);
+    else if (event.type === "export_progress") renderExport(data);
+    else if (event.type === "artifact_ready") renderArtifact(data.artifact);
     else if (event.type === "error" && !data.related_id) errorMessage(data.message);
     buttons();
   }
   function adopt(snapshot) {
     while (elMessages.firstChild) elMessages.removeChild(elMessages.firstChild);
     cards = {}; messages = {};
+    while (elArtifacts.firstChild) elArtifacts.removeChild(elArtifacts.firstChild);
+    artifacts = Object.create(null);
+    (snapshot.artifacts || []).forEach(renderArtifact);
     var timeline = snapshot.messages.map(function (message) {
       return {id: message.event_id || 0, message: message};
     }).concat((snapshot.tool_events || []).map(function (event) { return {id: event.id, event: event}; }));
@@ -106,15 +198,16 @@
     after = snapshot.last_event_id;
     sessionBusy = snapshot.agent_state === "processing";
     renderSlice(snapshot.slice);
+    renderExport(snapshot.export);
     if (pending && pending.session_id === snapshot.session_id &&
         snapshot.messages.some(function (m) { return m.client_message_id === pending.client_message_id; })) {
-      pending = null; save("ste_ai_pending", null); elInput.value = "";
+      pending = null; selected = []; save("ste_ai_pending", null); elInput.value = "";
     }
     if (pending) {
       elInput.value = pending.text;
       elState.textContent = "Есть неподтверждённая отправка. Повтор использует прежний client_message_id.";
     } else elState.textContent = sessionBusy ? "Агент выполняет запрос..." : "Диалог восстановлен.";
-    buttons();
+    attachmentList(); buttons();
   }
   function restore() {
     var current = ++generation;
@@ -125,7 +218,7 @@
   function newSession() {
     ++generation;
     return post("/api/sessions", {}).then(function (snapshot) {
-      sessionId = snapshot.session_id; pending = null; after = 0;
+      sessionId = snapshot.session_id; pending = null; selected = []; after = 0;
       save("ste_ai_session_id", sessionId); save("ste_ai_pending", null); adopt(snapshot);
     });
   }
@@ -166,20 +259,22 @@
   }
   function send(text) {
     text = text.trim();
-    if (!text || !sessionId || globalBusy || sessionBusy) return;
+    if (!text || !sessionId || globalBusy || sessionBusy || uploading || selected.some(function (item) { return !!item.error; })) return;
     if (pending && (pending.text !== text || pending.session_id !== sessionId)) {
       errorMessage("Сначала проверьте/повторите прежнюю неподтверждённую попытку; новый ID автоматически не создаётся.");
       return;
     }
-    if (!pending) pending = {session_id: sessionId, text: text, attachment_ids: [],
+    if (!pending) pending = {session_id: sessionId, text: text,
+      attachment_ids: selected.map(function (item) { return item.file_id; }),
+      attachments: selected.map(function (item) { return {file_id: item.file_id, name: item.name}; }),
       client_message_id: "client_" + Date.now() + "_" + Math.random().toString(36).slice(2)};
     save("ste_ai_pending", JSON.stringify(pending));
-    sessionBusy = true; buttons();
+    sessionBusy = true; attachmentList(); buttons();
     var attempt = pending;
     post("/api/sessions/" + encodeURIComponent(sessionId) + "/messages",
-      {text: attempt.text, attachment_ids: [], client_message_id: attempt.client_message_id}).then(function () {
+      {text: attempt.text, attachment_ids: attempt.attachment_ids || [], client_message_id: attempt.client_message_id}).then(function () {
         // Read the accepted user message; never add a second optimistic copy.
-        pending = null; save("ste_ai_pending", null); elInput.value = "";
+        pending = null; selected = []; save("ste_ai_pending", null); elInput.value = "";
         return restore();
       }).catch(function (err) {
         sessionBusy = false;
@@ -187,12 +282,13 @@
           pending = null; save("ste_ai_pending", null); // Definitive HTTP rejection, no turn accepted.
         }
         errorMessage(err.message);
-        buttons();
+        attachmentList(); buttons();
         return restore().catch(function () {});
       });
   }
 
   document.getElementById("chat-form").addEventListener("submit", function (event) { event.preventDefault(); send(elInput.value); });
+  elFiles.addEventListener("change", chooseFiles);
   elNew.addEventListener("click", function () { newSession().catch(function (err) { errorMessage(err.message); }); });
   var chips = document.querySelectorAll(".chip");
   for (var i = 0; i < chips.length; i++) {

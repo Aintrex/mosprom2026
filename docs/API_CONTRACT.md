@@ -2,11 +2,11 @@
 
 Версия документа: 1, 23.10.2026. Для фронтенда, HTTP/backend и интеграции STE Slicer. Это единое место описания HTTP-границы; изменение маршрутов, полей и событий согласовывать до изменения клиентов.
 
-**Статус:** в интеграции b9c0190 реализованы status, sessions, messages и polling событий (разделы 3–4, 6–7). Чат использует существующий реестр и адаптер. Вложения и скачивание остаются целевыми возможностями, маршруты `/api/files` отсутствуют. Все новые сценарии пока проверены только изолированно; native-приёмка открыта. Краткая инструкция клиенту — [FRONTEND_INTEGRATION.md](FRONTEND_INTEGRATION.md).
+**Статус:** в интеграции b9c0190 реализованы status, sessions, messages и polling событий (разделы 3–4, 6–7). Чат использует существующий реестр и адаптер. Роли2A/2B добавили POST `/api/files`, attachment_ids сообщений, image_url и load_model_file через прежний адаптер, минимальный picker. Роль2C добавляет скачивание зарегистрированных native-экспортов: attachments=true, downloads=true в plugin, downloads=false в dev. Флаг возможности не подтверждает готовность engine/лицензии. Все новые сценарии проверены изолированно; native-приёмка открыта. Краткая инструкция клиенту — [FRONTEND_INTEGRATION.md](FRONTEND_INTEGRATION.md).
 
 Интеграция моделей из [ТЗ 04](tasks/TASK_04_MODEL_LOADING.md) реализована для прямого MCP, см. раздел 2; ручная приёмка новых методов ещё не проводилась. HTTP-upload этим заданием не добавлен, приёмка ТЗ 03 остаётся отдельным открытым пунктом.
 
-Инструменты classic-нарезки [ТЗ 05](tasks/TASK_05_REAL_3D_SLICING.md) и штатного экспорта ТЗ 06 ожидают ручной проверки в STE Slicer. Агент публикует только реально прочитанные им снимки прогресса/результата; фонового наблюдения engine нет. 5D-нарезка не реализована.
+Инструменты classic-нарезки [ТЗ 05](tasks/TASK_05_REAL_3D_SLICING.md) и штатного экспорта ТЗ 06 ожидают ручной проверки в STE Slicer. Роль2D добавляет фоновое чтение статуса/результата только собственных подтверждённых запусков агента (раздел4), без новых LLM-запросов/запусков операций. ТЗ10/11 добавляют cylindrical/CLIParserBackend и cylindrical_full/CylindricalBackend, проверенные с подменами. Native-приёмка открыта. Принятая копия296 в tmp/acceptance/baseline_296 сохраняет прежнее поведение без этого наблюдения.
 
 ## 1. Общие правила
 
@@ -50,9 +50,17 @@
 - `select_profile`, аргументы `{"quality_type":"runtime-quality-type"}`: выбор доступной встроенной QualityGroup с сохранением overrides.
 - `select_material`, аргументы `{"extruder_id":"0","root_material_id":"runtime-root-id"}`: выбор материала указанного экструдера с подтверждением resolved container.
 - `load_model`, аргументы `{"path":"C:/Models/bracket.stl"}`: локальный mesh-импорт STL/OBJ/3MF с подтверждением завершения и новых объектов.
+- `load_model_file`, аргументы `{"file_id":"file-..."}`: импорт своей зарегистрированной модели через прежний адаптер с подтверждением; путь не принимается.
 - `list_models`, аргументы `{}`: верхние модели текущей сцены с непрозрачными ID и мировыми границами.
 - `get_model_bounds`, аргументы `{"object_id":"model-1"}`: актуальные мировые границы живой модели.
-- `start_slicing`, аргументы `{}`: короткий запуск штатной classic-нарезки, возвращает идентификатор для polling.
+- `get_model_state`, аргументы `{"object_id":"model-1"}`: origin, мировая матрица 4x4, габариты и outside_build_area.
+- `move_model`, аргументы `{"object_id":"model-1","position_mm":{"x":0,"y":10,"z":0}}`: абсолютная мировая позиция origin, мм.
+- `rotate_model`, аргументы `{"object_id":"model-1","axis":"y","angle_degrees":90}`: относительный поворот вокруг мировой оси через origin, градусы.
+- `scale_model`, аргументы `{"object_id":"model-1","factors":{"x":1.1,"y":1,"z":1.1}}`: множители мировых осей масштаба с сохранением origin.
+- `delete_model`, аргументы `{"object_id":"model-1"}`: удаление одной верхней модели/группы штатной операцией с Undo.
+- `arrange_models`, аргументы `{}`: запуск штатного ArrangeObjectsJob для всей активной платформы, только classic; возвращает свой arrangement_id.
+- `get_arrangement_status`, аргументы `{"arrangement_id":"arrangement-..."}`: состояние native job, фактические before/after и доступные сведения о границах размещения.
+- `start_slicing`, аргументы `{}`: короткий запуск штатной classic/cylindrical/cylindrical_full-нарезки, возвращает идентификатор для polling.
 - `get_slicing_status`, аргументы `{"slice_id":"slice-1"}`: состояние, прогресс и актуальность выбранного запуска.
 - `get_slicing_result`, аргументы `{"slice_id":"slice-1"}`: время/материал только завершённого актуального запуска.
 - `export_gcode`, аргументы `{"slice_id":"slice-1"}`: запуск штатного GCodeWriter из mesh-handler.
@@ -132,6 +140,20 @@ Before/after читаются из стека и нормализуются по
 
 Дополнительные операционные коды: setting_metadata_unavailable, setting_option_unavailable, setting_disabled, setting_read_only, setting_scope_unavailable, setting_context_changed. Сохранены setting_unavailable/setting_out_of_range/setting_not_applied, extruder_not_found/no_active_machine, slicing_busy/qt_timeout/slicer_error/slicer_not_connected. Полные проверки и ограничения: [отчёт ТЗ 07](reports/TASK_07_REPORT.md).
 
+### Пользовательские профили — ТЗ12, native-приёмка открыта
+
+Единый реестр добавляет list_custom_profiles{}, create_custom_profile{name}, select_custom_profile{profile_id}, save_custom_profile{profile_id}. Builtin select_profile{quality_type} не менялся: он по-прежнему отклоняет активный custom. Лишние поля/нестроковые аргументы запрещены до Qt; name1–80, profile_id1–256, без краевых пробелов/управляющих символов. Для нового name дополнительно запрещены разделители пути/двоеточие; существующий profile_id — непрозрачный lookup-ID, двоеточие/разделители не превращают его в путь. Мутации отмечены is_mutating и после неподтверждённого результата останавливают turn.
+
+List возвращает {machine_id,profiles:[{profile_id,name,quality_type,available,complete,active,container_ids}]}. ID — глобальный quality_changes контейнер из актуальной группы текущей машины; имя не используется вместо ID для поиска в произвольном Registry. Неполная группа недоступна; если глобального node нет, profile_id=null. Create отклоняет коллизию имени, вызывает native createQualityChanges, ждёт новую полную группу, проверяет перенос raw old qualityChanges+userChanges каждого global/extruder стека и неизменность прежнего custom; затем отдельно выбирает именно новую группу no_dialog с readback. Очистка userChanges допустима только как подтверждённый перенос. Rollback/удаления частичных контейнеров нет.
+
+Select сохраняет user overrides и подтверждает actual global/extruder quality/qualityChanges IDs. Save принимает только активную полную writable custom-группу; все контейнеры/userChanges проверяются до updateQualityChanges, после — каждый перенесённый ключ и очистка. True/None native API не являются доказательством. Ответ мутации: {profile_id,name,quality_type,container_ids,active,user_overrides_cleared,transferred_keys,persistence:{memory_verified,disk_verified,restart_verified:false}}. transferred_keys — только имена ключей по global/позициям, без сырых значений. У select disk_verified=false означает «файлы этой операцией не проверялись», а не отсутствие файла.
+
+Для create/save вызывается Registry.saveContainer только целевых QC через известный LocalContainerProvider. На Qt фиксируются native serialize и регистрация provider/path/mime; worker ограниченно читает реальные файлы (до2MiB каждый, UTF-8/universal newline), сравнивает с native serialized snapshot, затем Qt повторно подтверждает контекст/ID/сериализацию. В ответах/events нет путей/содержимого. Это подтверждение файлов профиля в текущем процессе, не активного выбора/userChanges-файлов/Preferences и не успешного восстановления после рестарта. Постоянство выбора и штатный lifecycle приложения проверяются отдельно.
+
+QtBridge/change_lock/инвалидация slice прежние. Pending-timeout отменяется; при running-timeout синхронного native provider guard держится до выхода callback и следующие контейнеры не сохраняются после abandonment. Native LocalContainerProvider/SaveFile пишет синхронно на Qt и способен ждать ОС: свой писатель/перенос Qt-объектов в worker не добавлены. Worker-файловая проверка вне Qt. Изменение машины/геометрии/режима/экструдеров/профиля/userChanges/постоянных контейнеров/значений во время подтверждения даёт ошибку, без автоповтора.
+
+Коды: custom_profile_not_available, custom_profile_not_active, custom_profile_read_only, custom_profile_name_conflict, custom_profile_context_changed, custom_profile_unconfirmed, custom_profile_storage_unavailable, custom_profile_storage_unconfirmed; selection_busy/qt_timeout/slicer_not_connected сохраняются. Error содержит actual:{phase,profile_id,memory_verified,disk_verified,...} с последним подтверждённым безопасным состоянием/числом оставшихся overrides, без значений/путей. Частичный профиль/запись могут остаться; перечитать list/UI, не создавать повтор автоматически. [TASK_12_REPORT.md](reports/TASK_12_REPORT.md).
+
 ### Локальные модели — ТЗ 04, runtime-приёмка открыта
 
 В трёх новых schemas все перечисленные поля обязательны, `additionalProperties=false`; path/object_id — `type:string,minLength:1`. Некорректная структура — JSON-RPC `-32602`. Остальные отказы — `{ok:false,error:{code,message}}` в MCP content, `isError=true`.
@@ -156,7 +178,49 @@ Before/after читаются из стека и нормализуются по
 
 Новые операционные коды: `invalid_model_path`, `unsupported_model_file`, `invalid_model_file`, `model_file_unavailable`, `model_not_found`, `model_bounds_unavailable`, `model_preview_active`, `model_load_busy`, `model_load_failed`, `model_scene_changed`, `model_load_timeout`. Сохранены `slicer_not_connected`, `no_active_machine`, `qt_timeout`, `slicer_error`; конкурирующие прежние setters возвращают свои busy-коды. При неопределённости требуется list_models. Подписки снимаются на Qt-потоке после подтверждённого завершения, ошибки подготовки или shutdown; незавершённый потенциально запущенный job сохраняет минимальный контекст для позднего завершения.
 
-### Classic-нарезка ТЗ 05 — реализована, runtime-приёмка открыта
+### Преобразования ТЗ 08 — реализованы, native-приёмка открыта
+
+Схемы добавлены в тот же ToolRegistry; четыре мутации входят в is_mutating и останавливают агент после неподтверждённого изменения. get_model_state — чтение. HTTP/цикл/SPA ради новых tools не менялись. Печатная модель/верхняя группа адресуется только живым object_id из list_models; дочерняя часть, служебный узел и preview не являются отдельной целью. Имена не заменяют ID.
+
+Верхние и вложенные JSON-объекты принимают ровно перечисленные поля. Только конечные int/float без bool/строк. axis — x/y/z, factors — 0.01–100 включительно, position_mm и angle_degrees — ±1000000. Это технические границы прототипа, не размеры принтера. Дополнительно проверяются аффинность/обратимость матрицы и консервативная конечная граница итоговой геометрии ±1000000 мм; небезопасный результат отклоняется до push. Неверная структура — -32602; неподдерживаемая геометрия — операционный отказ.
+
+get_model_state возвращает внутри ok/data:
+
+```json
+{"object_id":"model-1","position_mm":{"x":0,"y":10,"z":0},"world_transform":[[1,0,0,0],[0,1,0,10],[0,0,1,0],[0,0,0,1]],"bounds":{"coordinate_system":"uranium_world_y_up","unit":"mm","min":{"x":0,"y":10,"z":0},"max":{"x":2,"y":13,"z":4},"size":{"x":2,"y":3,"z":4}},"build_plate":0,"outside_build_area":false}
+```
+
+Y — высота, X/Z — стол. Матрица row-major, столбец [0..2][3] — origin; Euler-углы не используются. Масштабирование умножает **мировые оси**, а не локальные размеры после поворота. Габариты — прежняя схема мировых mesh-границ. outside_build_area: true/false из BuildVolume/SteSlicerSceneNode после проверки, null при отсутствии надёжного bbox/API. true сопровождается предупреждением в ответе мутации и не означает готовность к печати; false также не является проверкой всех условий печати.
+
+move/rotate/scale возвращают `{object_id,before:<state>,after:<state>,changed:true/false,warnings:[]}`. before/after перечитаны из сцены. У no-op (включая 0/полные обороты и factors=1) нет push и инвалидации native slice. Успех требует фактической матрицы, origin и габаритов с числовым допуском, не одного возврата push. delete возвращает `{removed_object_id,before:<state>,after:null,removed:true}` только после отсутствия узла в сцене/реестре и сохранности остальных моделей. Исходные файлы не удаляются. После Undo ID берётся заново из list_models, прежний ID остаётся model_not_found.
+
+Прототип требует активную машину/платформу, включённый узел и единичную мировую матрицу его родителя. Сама верхняя группа может быть преобразована, её печатные потомки меняются вместе. Нетривиальный родитель/preview/вырожденная матрица отклоняются до записи. **Automatic drop down и push free должны быть выключены пользователем в UI**: physics/automatic_drop_down и physics/automatic_push_free должны быть подтверждённо false. Иначе model_transform_unsupported, без изменения Preferences/геометрии. Физика форка с QTimer 100 мс могла бы позже сдвинуть origin или соседние модели; ожидание/отключение её из плагина не добавлено. Даже после отключения пользователь не должен параллельно редактировать сцену/запускать tools.
+
+Все чтения, операции/Selection/BuildVolume и push — Qt через существующий мост. Общий guard удерживается на Qt до подтверждения, в том числе после timeout worker. Он запрещает запись при импорте/нарезке/экспорте/другой мутации; также проверяются текущая занятость backend и штатная запись local_file. Чтения доступны. После начатого push slice консервативно инвалидируется даже при ошибке; автоотката нет, Undo — отдельное пользовательское действие. В агентном кеше no-op также может консервативно снять valid; свежий status восстанавливает фактическое native-значение.
+
+Ошибки: model_not_found, model_bounds_unavailable, no_active_machine, model_operation_busy, model_transform_unsupported, model_transform_not_applied; qt_timeout/slicer_not_connected/slicer_error сохраняют смысл моста/адаптера. После начатой/неподтверждённой операции перечитайте get_model_state/list_models/UI, не повторяйте автоматически. Стандартный Undo/Redo может объединять соседние native operations; один вызов не обещает ровно один шаг Undo. Слайсинг/экспорт после Undo требуют новой актуальной нарезки. Подмены и чтение исходников не закрывают native-приёмку; отчёт — [TASK_08_REPORT.md](reports/TASK_08_REPORT.md).
+
+### Расстановка ТЗ 09 — native job подключён, native-приёмка открыта
+
+arrange_models входит в is_mutating, status — чтение. Используются тот же реестр/QtBridge/ModelRegistry/общий guard; агент/HTTP/SPA не менялись. Структура и типы строгие: только `{}` либо непустая строка arrangement_id без лишних полей, иначе -32602 до API. Память хранит до 16 последних принятых запусков; неизвестный/истёкший ID — arrangement_not_found. Без app — slicer_not_connected.
+
+Принятие возвращает быстро queued/running с arrangement_id; это не завершение и не «всё помещается». status возвращает внутри ok/data `{arrangement_id,state,progress,error,models,all_fit,valid,observed_at,warnings}`. models — массив `{object_id,before:<get_model_state>,after:<get_model_state|null>}`; before/after сохраняют origin/матрицу/габариты/Y-up из ТЗ 08. У недоступного after при конфликте возможен after_error:{code,message}. До окончательного выхода job after=null. Частичные фактические after по живым ID сохраняются и при failed. observed_at — UTC-время чтения результата или null. valid означает соответствие сохранённого снимка текущему контексту, а не успешность поиска места/печати; после следующей расстановки или обнаруженного изменения он false, история не перезаписывается новыми позициями.
+
+state: queued/running/completed/failed. Native job публикует ранний finished и повторный finished после JobQueue; принимается только свой job с isFinished()==true и isRunning()==false, затем Qt-проверка. getResult()==None в этом форке нормален; hasError/getError проверяются отдельно, приватные детали не возвращаются. progress всегда null: ArrangeObjectsJob не испускает Job.progress, процент штатного Message наружу не подменяется расчётом по времени.
+
+**completed подтверждает выход job и сохранение after, не полное решение.** Native found_solution_for_all — локальная переменная, наружу не отдаётся. Непоместившийся объект переносится в `(200,center_y,-n*20)`, что может находиться внутри Hybrid 530. Поэтому outside=false у всех не доказывает, что найдены места всем. В этой версии all_fit **не бывает true**: после успешной проверки false при хотя бы одном штатном outside_build_area=true; иначе null (также при недоступных границах или ненаблюдаемом перемещении). При failed/неподтверждённом контексте all_fit остаётся null. Подтверждённый false сохраняется и без изменения матриц. Per-object outside — факт, не собственная проверка коллизий/полного размещения. UI должен показывать неизвестность и предложить сверить штатную расстановку/сообщение STE; arranged:true не выдаётся.
+
+Перед запуском нужны активная машина/платформа, classic с соответствующим backend, auto_slice=false и обе physics-опции=false, отсутствие preview/конкурирующих job/записи. Preferences пользователь меняет в UI, плагин их не трогает. Выбираются все адресуемые верхние модели активной платформы; каждая включена/selectable под единичным мировым родителем. Все печатные части группы принадлежат активной платформе. Остальные платформы/служебные узлы не передаются job. Пустая платформа → empty_scene, без фиктивного job. Нужны native hull/head hull с конечными непустыми точками и BuildVolume. Отсутствующие/некорректные hull и модели шире/глубже стола отклоняются до запуска всей группы, без тихого пропуска. AABB не заменяет hull. min_offset=max(getEdgeDisallowedSize()+2,8), как в app.arrange; собственный упаковщик не используется.
+
+Job создаётся/подписывается на Qt, start отправляет его в **штатную JobQueue**, как native Arrange All. Внутренние чтения сцены/GroupedOperation native run выполняет в своём worker по API форка; плагин не добавляет туда собственные обращения к app и не запускает run на Qt. Свои callbacks через app.callLater, таймер 250 мс/status только наблюдают; Qt не ждёт job. До завершения берутся только flags/context, итоговая геометрия читается после выхода. Проверяются машина/scene/root/платформа/контейнеры, состав моделей, mesh/части/родители, rotation/scale и относительная геометрия группы; другие платформы не должны изменить матрицы. Разрешены native translate/drop и снятие ZOffsetDecorator.
+
+Общий guard удерживается до фактического выхода и проверки. Бюджет 120 секунд с принятия: timeout → failed/arrangement_timeout, без cancel/kill/повтора/отката; guard и job/nodes остаются до публичного подтверждения выхода. Поздний выход не меняет failed на completed. При ошибке start после возможного принятия сохраняются ID/guard до выхода или перезапуска. Просроченная подготовка в обычном Qt-бюджете отменяется до native start. Shutdown останавливает timer/новые действия, но удерживает нужный live-контекст/finished-подписку до выхода; если event loop уже недоступен, безопасное наблюдение не гарантируется и нужен перезапуск.
+
+Вызов консервативно инвалидирует прежнюю нарезку/экспорт. Ручные параллельные изменения не поддерживаются: обнаруженные конфликты → failed/arrangement_context_changed с фактическим частичным after, без отката. Нельзя надёжно отличить ручной перенос целевой модели от native translate по одному конечному снимку; параллельные user tools запрещены правилами сценария. Undo — штатный пользовательский, после проверки состояния; новую нарезку запускают отдельно.
+
+Ошибки: empty_scene, no_active_machine, unsupported_arrangement_mode, auto_slicing_enabled, arrangement_busy, arrangement_unsupported, arrangement_hull_unavailable, arrangement_not_found; состояния failed используют arrangement_failed/arrangement_context_changed/arrangement_timeout/slicer_not_connected. После ошибочного старта/timeout перечитайте list_models/get_model_state/status/UI, не повторяйте автоматически. Отчёт — [TASK_09_REPORT.md](reports/TASK_09_REPORT.md).
+
+### Нарезка classic/cylindrical/cylindrical_full (ТЗ05/10/11) — runtime-приёмка открыта
 
 Схемы трёх методов имеют `type:object`, `additionalProperties:false`. У `start_slicing` — `properties:{}`, `required:[]`; у двух методов чтения единственное обязательное поле `slice_id` с `type:string,minLength:1`. Неверные типы/лишние поля — JSON-RPC `-32602`, без API-вызова. Без приложения — `slicer_not_connected`. Общая оболочка остаётся `{ok:true,data:...}` / `{ok:false,error:{code,message}}` внутри MCP content; операционные ошибки имеют `isError:true`.
 
@@ -174,18 +238,18 @@ Before/after читаются из стека и нормализуются по
 
 Числа выше иллюстративны. Время берётся через `int(PrintInformation.currentPrintTime)` в секундах; длина — сумма `materialLengths` в метрах, переведённая в мм; вес — сумма `materialWeights` в граммах. Позиции экструдера спискам не приписываются. Округление длины в STE до 0.01 м сохраняется; точность выше источника не обещается. Это прогноз слайсера, не измерение физической печати. Недоступное/неконечное значение — null и пояснение в `warnings`; подтверждённый ноль разрешён. Собственных формул времени/расхода и генерации G-code нет.
 
-До forceSlice проверяются classic и идентичность runtime-backend, активная машина, одна непустая активная платформа, отсутствие G-code preview, импорта и подготовки/обработки слоёв. При включённом `general/auto_slice` требуется выключить его вручную в UI. Плагин не меняет Preferences. Ручной параллельный запуск/редактирование не поддерживаются; обнаруженный конфликт не считается нашим успехом.
+До forceSlice проверяются три разрешённых режима и идентичность зарегистрированного runtime-backend, активная машина, одна непустая активная платформа, отсутствие G-code preview, импорта и подготовки/обработки слоёв. При включённом `general/auto_slice` требуется выключить его вручную в UI. Плагин не меняет Preferences. Ручной параллельный запуск/редактирование не поддерживаются; обнаруженный конфликт не считается нашим успехом.
 
 Подписки устанавливаются до forceSlice на Qt. Завершение требует начала (`slicingStarted/Processing`), собственного `Done`, отдельного Qt-callback после финализации, свободного backend, неизменного контекста, свежего G-code и собственных оценок платформы с последующим обновлением всех трёх полей PrintInformation. Начальный `NotStarted`, один progress=1, старый буфер/время и чужой Done недостаточны. Учтена штатная замена пустых списков в GenerateBasementJob/первом GCodeLayer; непустой захваченный буфер другим списком не подменяется. Оценка другого зарегистрированного backend той же платформы — конфликт.
 
-Таймер наблюдения на Qt — 250 мс, бюджет принятого запуска — **180 секунд**, без блокирующего ожидания на Qt/HTTP. После `slicing_timeout`, отмены или ошибки поздний Done не меняет failed на completed. Общая защита остаётся до наблюдаемого освобождения `_slicing/_start_slice_job/_generate_basement_job/_process_layers_job`; собственных вызовов Stop/kill/retry нет. Если поля не освобождаются, нужен ручной Stop/ожидание либо перезапуск приложения. Эти приватные поля и `_start_slice_job_build_plate` читаются только в slicing.py, не изменяются плагином.
+Таймер наблюдения на Qt — 250 мс, бюджет принятого запуска — **180 секунд**, без блокирующего ожидания на Qt/HTTP. После `slicing_timeout`, отмены или ошибки поздний Done не меняет failed на completed. Общая защита остаётся до наблюдаемого освобождения `_slicing/_start_slice_job/_generate_basement_job/_process_layers_job`; собственных вызовов Stop/kill/retry нет. Если поля не освобождаются, нужен ручной Stop/ожидание либо перезапуск приложения. Для CLI дополнительно учитываются собственные `_process_cli_job`/Glicer и flags захваченных jobs; basement у него отсутствует. Эти приватные поля и `_start_slice_job_build_plate` только читаются наблюдателем, не изменяются плагином.
 
 Защита использует прежний общий lock адаптера. Пока запуск выполняется (включая неопределённый выход после ошибки), `start_slicing`/`set_setting` получают `slicing_busy`; режим, качество/материал и импорт сохраняют прежние `switch_in_progress`, `selection_busy`, `model_load_busy`. Чтения доступны. Изменения печатных mesh/мировых трансформаций, raw-параметров и ID контейнеров глобального/экструдерных/объектных стеков, режима, машины/backend/сцены/платформы делают результат stale. Камера, выделение и служебные узлы слоёв в снимок не входят. Возврат исходной настройки не восстанавливает valid — нужна новая нарезка.
 
 | Код | Значение |
 | --- | --- |
 | `empty_scene` | Нет печатной модели |
-| `unsupported_slicing_mode` | Не classic или backend не совпадает с classic |
+| `unsupported_slicing_mode` | Режим не разрешён либо backend не совпадает с зарегистрированным для режима |
 | `slicing_busy` | Конкурирующая операция/занятый backend |
 | `auto_slicing_enabled` | Нужно выключить автоматическую нарезку в UI |
 | `multiple_build_plates` | Непустая платформа не одна активная |
@@ -194,18 +258,28 @@ Before/after читаются из стека и нормализуются по
 | `slice_not_ready` | Запуск ещё не completed либо завершился failed |
 | `slice_result_stale` | Completed относится к прежнему контексту |
 | `slicing_failed` | Реальный отказ подготовки/engine/API либо запуск не подтверждён; детали в журнале |
+| `slicing_process_failed` | Glicer завершился с ненулевым кодом |
+| `slicing_parser_failed` | Ошибка/смена сокета либо выход CLIParser |
 | `slicing_timeout` | Истекли 180 секунд, engine автоматически не отменён |
 | `slicing_cancelled` | Отмена backend/пользователем |
 | `slicing_context_changed` | Печатный контекст изменён во время запуска |
 | `slicing_conflict` | Повторный старт, чужое задание/платформа или оценки другого backend |
 
-Также сохраняются `no_active_machine`, `qt_timeout`, `slicer_not_connected`, `slicer_error`. При shutdown собственные сигналы/таймер снимаются через Qt, отложенные callbacks становятся неактивны, ссылки/свой lock освобождаются; чужой engine не завершается. Из-за отсутствия engine request ID неотличимые ручные операции с тем же backend/платформой запрещены для этого прототипа. Подробности и пределы проверки: [отчёт ТЗ 05](reports/TASK_05_REPORT.md).
+Также сохраняются `no_active_machine`, `qt_timeout`, `slicer_not_connected`, `slicer_error`. При shutdown classic сохраняет прежнее поведение. Для CLI до30 секунд действует только readonly Qt-poll собственных jobs/Glicer: до подтверждённого выхода guard сохраняется, без scene/PI/engine-действий. По подтверждённому выходу guard освобождается; по истечении30 секунд наблюдение/подписки снимаются с неизвестным исходом и удержанным guard, нужен перезапуск приложения. Timeout/shutdown не убивают native процесс; без Qt event loop cleanup не гарантируется. Из-за отсутствия engine request ID неотличимые ручные операции с тем же backend/платформой запрещены для этого прототипа. Подробности и пределы проверки: [отчёт ТЗ 05](reports/TASK_05_REPORT.md).
+
+ТЗ10 сохраняет захваченные printing_mode/backend_id и проверяет регистрацию classic→CuraEngineBackend, cylindrical→CLIParserBackend. CLI-layout без basement проверяется по подтверждённым полям; неизвестный отклоняется до forceSlice. forceSlice запускает штатные prep → Glicer → ProcessCliJob → CLIParser целиком. Собственные jobs коррелируются по identity/платформе/flags/result/error/cancel; Glicer — новый процесс с exit0. Живой переиспользуемый parser не считается незавершённым Glicer: успех требует его собственного Done после передачи ProcessCliJob, отложенного Qt-readback после окончательных замен G-code, выхода известных jobs/Glicer/слоёв, свежего буфера и подтверждённого PI. Прогресс1/ProcessCliJob.Finished сами по себе не означают completed. Старые/промежуточные оценки игнорируются; повторная последняя оценка должна пройти PI revisions всех полей, чужой backend той же платформы по-прежнему вызывает конфликт. Если до forceSlice parser отсутствовал, допускается ровно одна штатная замена socket внутри синхронного собственного forceSlice, затем socket фиксирован; позднее появление первого parser-процесса допустимо. Смена уже захваченного процесса/сокета/job/буфера не подменяет результат. Изменение финального CLI-буфера in-place также делает результат stale. При отсутствии финала/достоверного захвата стадий будет ошибка/timeout, без синтетического успеха.
+
+Внешние схемы и единицы прежние; null-показатели сопровождаются warnings. Экспорт использует прежние native writers/WriteFileJob и окончательный buffer этого slice_id; workspace writer сохраняет текущие контейнеры с cylindrical/настройками, проверка повторным открытием остаётся ручной. Нет process wait/kill/subprocess из плагина, переназначения native handlers, расчёта времени/траекторий или обхода активации. Протокол Arcus не содержит plugin slice_id; неотличимые сторонние сообщения того же parser при одновременной ручной работе не поддерживаются. [TASK_10_REPORT.md](reports/TASK_10_REPORT.md).
+
+ТЗ11: cylindrical_full→CylindricalBackend — составной конвейер prep → GenerateBasementJob → Cura → Glicer/ProcessCliJob → parser. Outer не имеет собственного parser _process/_socket: getBackends должен содержать зарегистрированные CuraEngineBackend/CLIParserBackend, свободные до старта, с инициализированными sockets для prep.createMessage. Неизвестный/неинициализированный состав отклоняется до forceSlice. Подчинённые Done/промежуточный outer Processing0.5 не финал. Собственные finished связывают ровно по одному штатному reset socket/process Cura и parser; дальнейшие замены/чужие задания/платформы — отказ. Prep проверяется с _start_slice_job_build_plate и Finished, basement — finished/running/error/cancel и native output с законным result=None/plate=None (outer его не назначает), ProcessCliJob — свой процесс/платформа/Finished плюс exit0 Glicer. Нельзя требовать один enum у всех jobs.
+
+Финал full — только outer parser-final и deferred-readback окончательного G-code с последней подтверждённой outer→PI оценкой. Самостоятельного суммирования промежуточных оценок/основания нет. После ошибки/timeout late final может доказать выход стадии и освободить guard, но не превращает failed в completed. Живой idle child не мешает успеху; активная собственная Cura/parser-фаза удерживает guard даже при outer._slicing=false до фактического финала/выхода. Shutdown наследует30с readonly-бюджет, наблюдает также штатные стадии, возникшие после close, без scene/PI/новых действий engine; неизвестный исход требует перезапуска. Итоговые full chunks и контекст защищают прежний export/3MF, но Preview/reopen остаются ручными. [TASK_11_REPORT.md](reports/TASK_11_REPORT.md).
 
 ### Штатный экспорт ТЗ 06 — реализован, runtime-приёмка открыта
 
 Каждый метод имеет ровно одно обязательное поле из списка выше: `type:string,minLength:1`, схема `type:object,additionalProperties:false`. Произвольный output_path не принимается. Неверные аргументы — JSON-RPC -32602 до API; без app — slicer_not_connected. Прежние envelope/isError сохранены; failed-статус читается успешно, причина в data.error. Неизвестный ID не заменяется последним.
 
-Оба запуска требуют актуальный completed slice_id в classic из единственного контекста ТЗ 05. Старый/неуспешный ID и занятые engine/слои/общий lock отклоняются до writer. Проверяется также readonly LocalFileOutputDevice._writing. Ручная параллельная запись/редактирование не поддерживаются; OutputDeviceManager.writeStarted фиксирует конфликт.
+Оба запуска требуют актуальный completed slice_id в одном из трёх разрешённых режимов из единственного контекста slicing. Старый/неуспешный ID и занятые engine/слои/общий lock отклоняются до writer. Проверяется также readonly LocalFileOutputDevice._writing. Ручная параллельная запись/редактирование не поддерживаются; OutputDeviceManager.writeStarted фиксирует конфликт.
 
 ```json
 {"export_id":"export-example","slice_id":"slice-1","kind":"gcode","state":"queued","progress":null,"error":null,"artifact":null,"local_directory":null,"valid":false}
@@ -217,7 +291,7 @@ Start возвращает queued, не ждёт writer. Состояния queu
 {"export_id":"export-example","slice_id":"slice-1","kind":"project","state":"completed","progress":null,"error":null,"artifact":{"artifact_id":"artifact-example","file_name":"project.3mf","kind":"project","size_bytes":12345,"slice_id":"slice-1","source":"ste_slicer","writer_id":"3MFWriter","writer_type":"workspace_writer"},"local_directory":"<cache>/AIAssistant/exports/export-random","valid":true}
 ```
 
-Для G-code — result.gcode, kind=gcode, writer_id=GCodeWriter, writer_type=mesh_writer. ID непрозрачны, не пути. Реестр в памяти содержит только созданные нами проверенные файлы; после перезапуска ID не восстанавливаются. local_directory — диагностический путь прямого MCP; будущий download API должен работать по зарегистрированному artifact_id. Новых файловых HTTP-маршрутов нет. Кэш может очищаться приложением, нужные результаты копируются пользователем.
+Для G-code — result.gcode, kind=gcode, writer_id=GCodeWriter, writer_type=mesh_writer. ID непрозрачны, не пути. Реестр в памяти содержит только созданные нами проверенные файлы; после перезапуска ID не восстанавливаются. local_directory — диагностический путь прямого MCP; чат удаляет его из tool-result. Скачивание роли2C работает через отдельный зарегистрированный file_id, см. раздел 5. Кэш может очищаться приложением, нужные результаты сохраняются пользователем.
 
 Поиск writer, узлы, создание/запуск WriteFileJob, getResult/getError и проверки контекста — на Qt. Открытие/flush/close/проверка/публикация файлов — в отдельном stdlib I/O worker без app-вызовов. Штатный job входит в writer на worker приложения: WorkspaceWriter переносит тело write на Qt, GCodeWriter переносит thumbnail, остальные чтения выполняет по своему встроенному механизму. Декораторы/дистрибутив не меняются; синхронного writer.write внутри QtBridge нет.
 
@@ -254,8 +328,8 @@ Preflight сохраняет slice_not_found/slice_not_ready/slice_result_stale;
 | `GET /api/sessions/{session_id}` | История и актуальное состояние диалога | 200 |
 | `POST /api/sessions/{session_id}/messages` | Принять сообщение и запустить цикл агента | 202 |
 | `GET /api/events?session_id=...&after=0` | Получить события после курсора | 200 |
-| `POST /api/files` | Будущий upload, сейчас отсутствует | 404 |
-| `GET /api/files/{file_id}` | Будущее скачивание, сейчас отсутствует | 404 |
+| `POST /api/files` | Роль2A: одно вложение в приватное хранилище, без импорта/LLM | 201 |
+| `GET /api/files/{file_id}` | Роль2C: зарегистрированный актуальный native-экспорт | 200, бинарное тело |
 
 Поле capabilities позволяет UI включать только реализованные возможности. REST-настроек LLM нет: ключ вводится только в Qt-меню **AI Assistant → LLM Settings**, URL/модель/ключ сохраняются через Preferences и существующий QtBridge. Пустой ключ при сохранении сохраняет прежний; отдельный флажок удаляет его. После неподтверждённой записи кеш не используется до перечитывания Preferences. Наличие настроек не доказывает связь с провайдером.
 
@@ -267,26 +341,26 @@ Preflight сохраняет slice_not_found/slice_not_ready/slice_result_stale;
 {
   "api_version": 1,
   "mode": "plugin",
-  "capabilities": {"chat": true, "attachments": false, "events": true, "downloads": false, "background_slice_events": false},
+  "capabilities": {"chat": true, "attachments": true, "events": true, "downloads": true, "background_slice_events": true},
   "llm": {"configured": true, "has_key": true},
   "agent_state": "idle",
   "slicer": {"connected": true, "machine_name": "Stereotech Hybrid 530 V5.2.4", "printing_mode": "classic"},
-  "limits": {"message_characters": 12000, "files_per_message": 0, "file_bytes": 0},
-  "accepted_extensions": []
+  "limits": {"message_characters": 12000, "files_per_message": 5, "file_bytes": 52428800, "image_bytes": 5242880, "images_per_message_bytes": 10485760},
+  "accepted_extensions": [".3mf", ".jpeg", ".jpg", ".obj", ".png", ".stl"]
 }
 ```
 
-`mode`: `plugin` или `dev`. `machine_name`/`printing_mode` могут быть null при отсутствии машины; connected не равно «машина готова к нарезке». `llm.configured` означает наличие подтверждённых настроек, не успешность запроса к провайдеру. Здесь нет ключа, URL, модели или значений Preferences. `agent_state` описывает общий turn для всей сцены, не состояние engine. Dev не имеет Preferences/STE и сам не вызывает LLM. Лимиты выше — фактические ограничения этой версии.
+`mode`: `plugin` или `dev`. `machine_name`/`printing_mode` могут быть null при отсутствии машины; connected не равно «машина готова к нарезке». `llm.configured` означает наличие подтверждённых настроек, не успешность запроса к провайдеру. Здесь нет ключа, URL, модели или значений Preferences. `agent_state` описывает общий turn для всей сцены, не состояние engine. downloads=true означает наличие native resolver→HTTP, не существование готового файла; background_slice_events=true — наличие observer собственных slice/export, не наблюдение всей сцены/истории. В dev оба false. Dev не имеет Preferences/STE и сам не вызывает LLM. Лимиты выше — фактические ограничения этой версии.
 
 ### Диалог и сообщение
 
 POST `/api/sessions` возвращает:
 
 ```json
-{"session_id":"session_1","messages":[],"agent_state":"idle","last_event_id":0,"slice":null,"artifacts":[],"tool_events":[]}
+{"session_id":"session_1","messages":[],"agent_state":"idle","last_event_id":0,"slice":null,"export":null,"artifacts":[],"tool_events":[]}
 ```
 
-GET `/api/sessions/{session_id}` возвращает ту же форму с фактической историей. `messages` — упорядоченный массив `{message_id,role,text,attachment_ids,created_at,event_id}`; role: user/assistant. У user есть `client_message_id`, у assistant — `is_error`. `tool_events` содержит сохранённые tool_started/tool_finished; для восстановления ленты объединить их с messages по `event_id`/`id`. Системный промпт/служебная LLM-история не выдаются. Snapshot и курсор атомарны.
+GET `/api/sessions/{session_id}` возвращает ту же форму с фактической историей. `messages` — упорядоченный массив `{message_id,role,text,attachment_ids,created_at,event_id}`; user также содержит attachments — массив безопасных метаданных upload в исходном порядке, без путей/байтов; role: user/assistant. У user есть `client_message_id`, у assistant — `is_error`. `tool_events` содержит сохранённые tool_started/tool_finished; для восстановления ленты объединить их с messages по `event_id`/`id`. Системный промпт/служебная LLM-история не выдаются. Snapshot и курсор атомарны.
 
 POST `/api/sessions/{session_id}/messages`:
 
@@ -296,7 +370,7 @@ POST `/api/sessions/{session_id}/messages`:
 
 `client_message_id` — ID, создаваемый UI для одной попытки отправки; повтор того же сообщения после сетевой ошибки использует тот же ID. Backend возвращает прежний ответ для того же ID и тела, а для того же ID с другим телом — 409. Не повторять автоматически сообщение с новым ID: это может повторить изменение сцены.
 
-`text` — непустая строка после trim, входная длина до 12000 символов; `client_message_id` — непустая строка до 128. Разрешены только эти три поля. attachment_ids можно опустить или передать []; непустой список отклоняется `400 attachments_unavailable`. Идемпотентность сравнивает принятый trim-текст и полный массив вложений; конфликт с уже принятым ID даёт 409 даже для неподдерживаемого нового вложения. Для всей сцены допускается один активный turn: новый запрос в любом диалоге получает 409 agent_busy. Принятое сообщение сохраняется в истории до ответа HTTP 202:
+`text` — непустая строка после trim, входная длина до 12000 символов; `client_message_id` — непустая строка до 128. Разрешены только эти три поля. attachment_ids можно опустить или передать до5 уникальных зарегистрированных ID (строки до128 символов); суммарно изображения до10MiB. До принятия проверяются типы/лимиты/реестр: неизвестный ID404 file_not_found, превышение413 attachment_limit, дубликаты/неверный тип400 invalid_arguments. Идемпотентность сравнивает принятый trim-текст и полный массив вложений; конфликт с уже принятым ID даёт 409 даже для неподдерживаемого нового вложения. Для всей сцены допускается один активный turn: новый запрос в любом диалоге получает 409 agent_busy. Принятое сообщение сохраняется в истории до ответа HTTP 202:
 
 ```json
 {"session_id":"session_1","message_id":"message_1","client_message_id":"client_1","agent_state":"processing"}
@@ -306,7 +380,7 @@ POST `/api/sessions/{session_id}/messages`:
 
 История хранится в памяти: до 32 диалогов, 512 принятых ID на диалог, 200 видимых сообщений, 12 целых блоков истории LLM (включая tools и частично выполненные действия при ошибке), 1000 событий. При достижении лимита диалогов/ID — 409 session_limit. UI сохраняет session_id и неподтверждённую попытку (полное тело/ID) в localStorage, восстанавливает snapshot; после перезапуска плагина неизвестный session_id даёт 404, UI объясняет сброс и ничего автоматически не повторяет. Постоянной истории нет.
 
-### Вложения и скачивание — только целевой контракт, не реализованы
+### Upload и вложения — роли2A/2B реализованы; native-приёмка открыта
 
 POST `/api/files`: `multipart/form-data`, одно поле `file`. Content-Type с boundary формирует браузер:
 
@@ -319,16 +393,28 @@ const response = await fetch("/api/files", {method: "POST", body: form});
 Не выставлять Content-Type вручную для FormData. После успешной проверки типа, размера, безопасного сохранения и назначения ID ответ 201:
 
 ```json
-{"file_id":"file_1","name":"bracket.stl","kind":"model","size_bytes":125000,"mime_type":"model/stl"}
+{"file_id":"file-opaque","name":"bracket.stl","kind":"model","size_bytes":125000,"mime_type":"model/stl"}
 ```
 
-`kind`: `image` или `model`; расширение/содержимое проверяет сервер, присланному MIME слепо не доверять. Неизвестные и недоступные file_id отклонять. Загрузка файла ещё не означает загрузку модели в сцену: эту операцию отдельно выполняет инструмент агента.
+`kind`: image (.jpg/.jpeg/.png) или model (.stl/.obj/.3mf). MIME сервер устанавливает после базовой проверки: image/jpeg, image/png, model/stl, model/obj, model/3mf. Заявленному Content-Type части не доверяет. Исходное UTF-8/RFC2231-имя — отображение, не путь: разделители, двоеточие/управляющие символы, хвостовые пробелы запрещены. Физическое имя — серверный UUID; file_id непрозрачен и не разбирается в путь. HTTP не возвращает каталог/физическое имя.
 
-Через API отдавать ID и безопасное исходное имя, не произвольные пути пользователя. GET `/api/files/{file_id}` раздаёт только зарегистрированные backend файлы и проверенные артефакты. Для скачивания — Content-Disposition attachment с безопасным именем и фактический MIME. Не применять лимит JSON-запроса 64 KiB к multipart; загрузчику нужен отдельный конечный лимит из `/api/status`.
+Фактические технические лимиты upload: модель50MiB, изображение5MiB, multipart-обёртка64KiB, суммарно сохранённые файлы250MiB на процесс. JSON64KiB остальных маршрутов не увеличен. Требуются один положительный Content-Length и один multipart Content-Type/boundary (ASCII1–70), без chunked. Ровно один file-part, без preamble/epilogue/дополнительных полей/CTE/дубликатов заголовков; завершающий CRLF необязателен. Header+footer ограничены отдельно, payload пишется блоками до64KiB с конечным размером. Один upload одновременно; второй409 upload_busy. /api/status сообщает files_per_message=5, file_bytes=50MiB, image_bytes=5MiB, images_per_message_bytes=10MiB и список расширений; attachments=true. Размеры multipart/процессной квоты остаются ограничениями upload.
 
-UI отправляет attachment_ids в сообщение после завершения upload. При ошибке загрузки не изображать файл прикреплённым успешно. Очистка временных файлов — обязанность backend; отдельный DELETE для MVP не требуется.
+Проверка содержимого базовая, не собственный mesh/image decoder: PNG signature/chunks/CRC/IHDR/IDAT/IEND (до4096 chunks); JPEG markers/SOF/SOS/EOI без полной entropy-декодировки; STL — binary с числом треугольников и размером (включая header solid) либо ASCII solid/facet/vertex/endsolid; OBJ — текст с v и f/l/p, строка до1MiB. Геометрическую корректность позже подтвердит штатный STE-reader. 3MF — ZIP stored/deflate без encrypted/symlink/unsafe/duplicate имён, до1024 частей/200MiB раскрываемого объёма/16MiB основной XML-части, фактическое чтение с CRC. Нужны [Content_Types].xml, _rels/.rels, 3D/3dmodel.model с базовой core2015 resources/build; основной XML UTF-8 без DTD/entities. Архив не извлекается на диск. Нестандартные варианты вне этих границ могут быть отклонены.
 
-## 4. События и прогресс — реализованы снимки, без фонового мониторинга
+ID публикуется только после завершённой записи/проверки. Неправильный/оборванный запрос не регистрирует полуфайл; неуспешный физический файл удаляется. Реестр/квота thread-safe. Ошибки:400 invalid_upload,413 payload_too_large/file_limit_exceeded/archive_too_large,415 unsupported_media_type/unsupported_file_type/file_type_mismatch,409 upload_busy,503 service_stopped; внутренний отказ записи500 upload_storage_error/upload_failed/upload_id_collision без путей/данных. Host/Origin собственного порта/CSP/static whitelist сохранены. Upload-файлы не добавлены в static: GET по upload-ID возвращает404. Скачивание native-экспортов использует отдельный реестр, см. раздел5; публичного metadata API нет.
+
+Один FileStore на AgentService, ленивый собственный временный каталог вне Qt; нет БД/TTL/восстановления ID после перезапуска. close запрещает новые операции и запускает очистку в worker после текущего upload/leases, без ожидания в Qt. Удаляются только собственные учтённые файлы и свой пустой каталог, без recursive delete; чужой файл внутри каталога не удаляется. При аварийном завершении/отказе ОС возможны временные остатки; чужие папки не сканируются для очистки. Dev-сервер при выходе ограниченно ждёт cleanup вне Qt.
+
+Узкий **внутренний** API для2B: metadata(file_id) → копия метаданных; model_path(file_id) → lease своего модельного пути (context manager/close); read_image(file_id) → MIME и ограниченные байты своего изображения; close(). Неизвестный ID404 file_not_found, изменённый/утраченный файл404 file_unavailable, неверный kind415. Получение пути/чтение/очистка — вне Qt, ключи/пользовательский JSON не заменяют реестр. Lease надо удерживать до **фактического native завершения** импорта/отправки, включая model_load_timeout; повторный параллельный close атомарен. В2B callback reader_done передаётся только внутренним Python-параметром существующего adapter.load_model; в схемах его нет. Ранний отказ/не запущенный pending освобождает lease. Запущенный/неопределённый reader удерживается отдельной подпиской на свой fileCompleted независимо от ModelLoad.finish/закрытого QtBridge. Подписка/снятие — на Qt; lease.close не удаляет файлы в Qt. Если сигнала нет, lease удерживается консервативно и файл может остаться на диске после выхода процесса.
+
+После upload отправить file_id в attachment_ids с текстом и client_message_id. Принятое сообщение хранит метаданные для восстановления имён. JPG/PNG кодируются из собственных байтов как data:image/...;base64 в user content image_url, модели представлены только метаданными. В приватной LLM-истории остаются ID; base64 формируется перед complete и не выдаётся snapshot/events. Файлы принятых сессий сохраняются в хранилище до закрытия сервиса, TTL/раннего удаления нет. Ошибка vision/HTTP провайдера выдаётся честно, без текстового fallback-анализа.
+
+load_model_file({file_id}) присутствует в едином MCP/LLM ToolRegistry: только собственная модель, unknown/wrong-kind до API; путь не принимается. Вызывает прежний adapter.load_model/QtBridge, ждёт его подтверждения, возвращает обычные objects плюс file_id и исходное file_name. Это мутация: неподтверждённый импорт останавливает turn и дальнейшие tools. Диагностический load_model(path) по-прежнему исключён из LLM. Upload/HTTP202 сами по себе импорт не подтверждают.
+
+Минимальная SPA выбирает/последовательно загружает файлы, показывает имя/статус/ошибку и удаляет из списка до отправки (физический файл остаётся в квоте процесса). Отправка заблокирована до окончания upload и устранения ошибки. Pending сохраняет исходные IDs/текст/client_message_id и имена; повтор после refresh не перезагружает файл и не создаёт новый ID. Snapshot восстанавливает имена через textContent. Роль2D наблюдает собственные операции, но не запускает нарезку в фоне самостоятельно. Downloads роли2C описаны ниже. Отчёты: [ROLE_02A_REPORT.md](reports/ROLE_02A_REPORT.md), [ROLE_02B_REPORT.md](reports/ROLE_02B_REPORT.md).
+
+## 4. События и прогресс — снимки и observer собственных операций
 
 Polling раз в ~1 секунду, один незавершённый запрос на диалог; при сетевой ошибке увеличить интервал до нескольких секунд. Это обычный короткий GET, не long polling. Ответ:
 
@@ -349,12 +435,31 @@ Polling раз в ~1 секунду, один незавершённый зап�
 | `assistant_message` | `message_id`, `text`, `attachment_ids`, `created_at` | Завершённое сообщение и объяснение решений |
 | `tool_started` | `turn_id`, `tool_call_id`, `name`, `arguments` | Проверенные аргументы без секретов; отказ валидации не имеет started |
 | `tool_finished` | `turn_id`, `tool_call_id`, `name`, `result` | Реальный `{ok,data}` либо `{ok:false,error}`; после остановки — tool_not_executed |
-| `slice_progress` | `slice_id`, `state`, `progress`, `valid`, `error`, `observed_at`, `result` | Последний снимок, полученный tools, не текущее состояние engine |
+| `slice_progress` | `slice_id`, `state`, `progress`, `valid`, `error`, `observed_at`, `result`, необязательный `observation` | Последний фактический снимок из tool/observer |
 | `slice_finished` | Та же форма slice с `result` | Подтверждённый get_slicing_result, не завершение turn |
-| `artifact_ready` | `artifact` | Метаданные локального штатного экспорта, без ссылки скачивания |
+| `export_progress` | `export_id`, `slice_id`, `kind`, `state`, `progress`, `valid`, `error`, `observed_at`, `observation` | Один последний собственный экспорт сессии; готовые файлы отдельно в artifact_ready |
+| `artifact_ready` | `artifact` | Метаданные штатного экспорта; file_id/download_url после регистрации; также обновление известного artifact_id |
 | `error` | `code`, `message`, `related_id` (или null) | Понятная ошибка с привязкой к действию |
 
-Пара `(turn_id,tool_call_id)` связывает начало/конец; разные turn могут использовать одинаковый call ID. `slice_id` различает запуски; progress — 0..1 или null, состояния queued/running/completed/failed. События slice возникают только после реальных start/status/result tools. `background_slice_events:false`: после idle или лимита LLM engine может продолжаться; snapshot остаётся последним наблюдением, а не обещанием актуальности. Запросите новый статус (чатом или MCP). Автоматического мониторинга между turn нет. `completed` с `valid:false` — устаревший результат; не показывать как актуальный. Повторный актуальный status того же slice сохраняет уже прочитанный result, новый slice/неактуальность его очищают.
+Отказ LLM-tool **до запуска** публикует tool_finished без tool_started: `{ok:false,error:{code:"invalid_tool_arguments",message,stage:"validation",executed:false,arguments_summary,expected?}}`. message для setting-tools — безопасная причина прежнего строгого validator; expected — schema из общего реестра. arguments_summary содержит format=json_object/invalid_json_object, для разобранного объекта только field_types известных полей, missing_fields и unknown_fields_count (число имён вне schema). Значения/неизвестные имена/raw JSON/пути/ключи не копируются; field_types:null означает тип отдельного поля, а не доказательство raw-null всего вызова. Для global extruder_id запрещён даже null, хотя это известное поле общей schema: конкретную причину даёт validator, descriptions объясняют зависимость scope.
+
+Только этот stage=validation/executed=false разрешает модели исправить аргументы в прежнем ограниченном ходе; UI сам не повторяет вызов. Scope/value не подставляются и строки чисел не преобразуются. Правильный пример: `{key:"layer_height",scope:"global",value:0.12}` с JSON-числом, без extruder_id. После допуска к tools.call любые непредвиденные ошибки (включая ValueError), неизвестное исполнение и timeout сохраняют остановку мутаций; они не объявляются безопасной pre-validation ошибкой. MCP продолжает возвращать -32602 по прежним строгим validators. Подробности — [FIX_SETTING_TOOL_REPORT.md](reports/FIX_SETTING_TOOL_REPORT.md).
+
+Пара `(turn_id,tool_call_id)` связывает начало/конец; разные turn могут использовать одинаковый call ID. `slice_id` различает запуски; progress — 0..1 или null, состояния queued/running/completed/failed. `completed` с `valid:false` — устаревший результат; не показывать как актуальный. Повторный актуальный status того же slice сохраняет уже прочитанный result, новый slice/неактуальность его очищают.
+
+Роль2D: один ленивый daemon-worker AgentService хранит максимум две active-записи процесса (slice/export), только после успешных start_slicing/export_gcode/save_project_3mf агента с подтверждённым ID и владельцем session_id. Примерно раз в1с читает прежние tools через adapter/QtBridge вне ServiceLock. При completed/valid slice обязательно читает get_slicing_result; собственный completed export проходит прежнюю регистрацию download2C. Обновляет прежние slice/artifact события и export_progress, без фальшивых tool_started/tool_finished. После idle/ошибки/лимита LLM продолжает наблюдение без LLM-запросов; лимиты8/16/120 прежние. Новых start/export, автоматической цепочки slice→export или повторов мутации нет. Прямой MCP/ручные UI-запуски и прочитанные исторические IDs не становятся собственными наблюдаемыми операциями.
+
+`observation` — необязательное дополнение slice и обязательное для собственного export: `{state:"watching"|"finished"|"stopped",error:null|{code,message}}`. watching относится к наблюдателю, не гарантирует состояние engine; finished означает terminal-наблюдение/подтверждённый result, включая native failed/stale. stopped с observation_interrupted означает прекращение чтений с неизвестным исходом engine, не cancel/failed. Старый снимок без поля — только прежнее tool-наблюдение. Ошибки status/result повторяются ограниченно с backoff1/2/4с; после4 последовательных отказов observer удаляет active-запись, публикует observation_interrupted и оставляет реальное последнее state/error. Ранний get_slicing_result/slice_not_ready и transient qt_timeout от LLM сами не прекращают observer; настоящий slice_result_stale фиксирует stale. Terminal-записи не опрашиваются бесконечно. После terminal внешние изменения становятся известны очередному явному чтению/GET, постоянного сканирования всей сцены нет.
+
+Перед native-мутацией меняется поколение, чтения на её время приостанавливаются. ID/owner/поколение/closed повторно проверяются после Qt и регистрации download. Поздний ответ не заменяет новый ID/сессию и не оживляет known stale. Подтверждённые предварительные отказы slicing_busy/export_busy/selection_busy/model_load_busy/model_operation_busy/arrangement_busy/switch_in_progress сохраняют полезный observer; неопределённая/частичная мутация явно прерывает его и делает кеш stale. Export tools не инвалидируют живой slice. Одинаковые снимки не создают событий; observed_at — время последнего изменения опубликованного снимка, не heartbeat каждого удачного poll. Close выставляет stop/wake и очищает ownership без join на Qt: принятый in-flight read может вернуть поздний ответ, который игнорируется; новых циклов/публикаций нет. Engine/guard/native jobs не отменяются.
+
+Snapshot.export до собственного запуска null, затем один последний собственный экспорт сессии (не история):
+
+```json
+{"export_id":"export-1","slice_id":"slice-1","kind":"gcode","state":"running","progress":null,"valid":false,"error":null,"observed_at":"2026-10-24T06:00:00Z","observation":{"state":"watching","error":null}}
+```
+
+kind=project/gcode. Нет local_directory/path/identity/байтов; pending-экспорт не является artifact. После завершения готовый файл по-прежнему приходит artifact_ready и хранится в artifacts. Новый свой экспорт заменяет только snapshot.export; предыдущие готовые artifacts сохраняются. Restore/410 восстанавливает оба статуса из snapshot, не запускает операции. Memory-only ownership/история не переживают рестарт. Копия baseline_296 этого observer и поля export не имеет. Native-приёмка новой версии отдельно открыта: [ROLE_02D_REPORT.md](reports/ROLE_02D_REPORT.md).
 
 Страница — до 100 событий, хранится 1000. Устаревший курсор — 410 events_expired; курсор из будущего/неверный — 400 invalid_arguments. UI перечитывает snapshot и продолжает с last_event_id без дубликатов.
 
@@ -374,15 +479,21 @@ Polling раз в ~1 секунду, один незавершённый зап�
 }
 ```
 
-Недоступные время/масса/длина — null, не выдуманный 0. Это оценки слайсера и суммарный материал без неподтверждённого распределения по экструдерам. Форма совпадает с MCP get_slicing_result (включая возможные warnings), а не с прежним проектным materials[]. `slice`: `{slice_id,state,progress,valid,error,observed_at,result}`, до первого наблюдения null. После изменения проекта кеш помечается неактуальным; при ручных изменениях вне агента актуальность выясняется следующим tool-чтением.
+Недоступные время/масса/длина — null, не выдуманный 0. Это оценки слайсера и суммарный материал без неподтверждённого распределения по экструдерам. Форма совпадает с MCP get_slicing_result (включая возможные warnings), а не с прежним проектным materials[]. `slice`: `{slice_id,state,progress,valid,error,observed_at,result,observation?}`, до первого наблюдения null. После изменения проекта кеш помечается неактуальным; при ручных изменениях вне агента актуальность выясняется следующим tool/observer-чтением или GET скачивания.
 
 Артефакт в artifact_ready и массиве artifacts snapshot:
 
 ```json
-{"artifact_id":"artifact-1","file_name":"project.3mf","kind":"project","size_bytes":1234,"slice_id":"slice-1","source":"ste_slicer","writer_id":"3MFWriter","writer_type":"workspace_writer","valid":true}
+{"artifact_id":"artifact-1","file_name":"project.3mf","kind":"project","size_bytes":1234,"slice_id":"slice-1","source":"ste_slicer","writer_id":"3MFWriter","writer_type":"workspace_writer","valid":true,"file_id":"download-example","download_url":"/api/files/download-example"}
 ```
 
-`kind`: project/gcode (как у штатного экспорта). Метаданные появляются только после успешного get_export_status; полного local_directory в чате нет. HTTP download_url/file_id пока не выдаются, downloads:false. Завершение нарезки не подтверждает экспорт. G-code создаёт слайсер. Файлы остаются связаны с прежним slice_id, актуальность — на момент последнего чтения. Копирование локальных результатов пользователь выполняет по MCP/PowerShell из plugin README; браузер не раздаёт произвольные пути.
+`kind`: project/gcode (как у штатного экспорта). Метаданные появляются после успешного get_export_status, выполненного агентом либо observer его собственного экспорта. При completed/valid=true AgentService вне своего lock вызывает внутренний resolver адаптера через QtBridge: только принятый завершённый экспорт и актуальный slice. Затем отдельный DownloadRegistry вне Qt проверяет доверенный файл и регистрирует стабильные file_id/download_url. Повторное одинаковое чтение не создаёт ID/событие заново. Прямой MCP tools/call не наполняет snapshot чата и сам URL не регистрирует. Завершение нарезки не подтверждает экспорт; G-code создаёт слайсер.
+
+Путь/идентичность файла остаются внутренними полями resolver, отсутствующего в MCP/LLM. Канонические метаданные берутся из него, не из tool JSON. Ошибка регистрации оставляет карточку без URL с download_error:{code,message}; историческая карточка без URL остаётся локальным результатом. При известном изменении сцены/настроек или stale-статусе artifact_ready обновляет карточку valid=false; клиент объединяет по artifact_id, восстанавливает artifacts из snapshot после refresh/410. Observer наблюдает только активные свои ID: ручные изменения могут стать известны позже, GET всегда перепроверяет актуальность. UI показывает ссылку только при valid===true и собственном относительном `/api/files/{id}`, имя через textContent.
+
+GET принимает только зарегистрированный download-ID без query/path. Upload-ID и неизвестные ID —404. Перед заголовками resolver повторно проверяет native-актуальность через Qt; вне Qt lstat/open/fstat сверяют обычный файл, канонический путь, размер и сохранённые при native-публикации dev/ino/size/mtime_ns. Неизвестный/исчезнувший файл —404 file_not_found; неподтверждённые метаданные —404 artifact_unavailable; stale —409 artifact_stale; замена/изменение —409 artifact_changed; Qt недоступен —503 slicer_unavailable; сервис закрыт —503 service_stopped; отказ передачи до заголовков —503 download_unavailable. Регистрация при коллизии UUID —503 download_id_conflict без замены прежнего ID. Ошибки JSON стандартные {error:{code,message}}, без путей. После начала потока ошибка закрывает handle/соединение без дописывания JSON. Экспорт автоматически не повторяется.
+
+Успех: Content-Type=model/3mf для project, application/octet-stream для gcode; Content-Length, Content-Disposition attachment с UTF-8 filename*, Cache-Control:no-store, nosniff и прежний CSP. Имя запрещает CRLF/сепараторы пути, заголовок percent-encoded. Передача блоками до64KiB без ServiceLock/engine guard/Qt. Range/HEAD/resume не добавлены. Закрытие запрещает новые регистрации/GET, открытая передача может закончиться; принятые native-файлы не копируются в upload и не удаляются его очисткой. ID живут до рестарта. Fingerprint защищает от обычной замены/изменения, без криптографической гарантии против внешнего редактора с сохранением mtime. Изменения проекта/файла после начала передачи её не отзывают. Нужные результаты сохраните из кэша. Проверки и ограничения: [ROLE_02C_REPORT.md](reports/ROLE_02C_REPORT.md).
 
 ## 6. Ошибки нового API
 
@@ -394,15 +505,15 @@ Polling раз в ~1 секунду, один незавершённый зап�
 
 | HTTP | Коды/ситуации |
 | --- | --- |
-| 400 | `invalid_request`, `invalid_arguments`, `attachments_unavailable` |
+| 400 | `invalid_request`, `invalid_arguments` |
 | 403 | `forbidden_origin` |
-| 404 | `session_not_found`, `not_found` (в том числе ещё отсутствующие files/settings) |
-| 409 | `agent_busy`, `message_id_conflict`, `session_limit` |
+| 404 | `session_not_found`, `file_not_found`, `file_unavailable`, `artifact_unavailable`, `not_found` (settings отсутствует) |
+| 409 | `agent_busy`, `message_id_conflict`, `session_limit`, `artifact_stale`, `artifact_changed` |
 | 410 | `events_expired` |
-| 413 | `payload_too_large` |
+| 413 | `payload_too_large`, `attachment_limit` |
 | 415 | `unsupported_media_type` |
 | 500 | `internal_error`; техническая причина только в безопасном журнале |
-| 503 | `llm_not_configured`, `service_stopped` |
+| 503 | `llm_not_configured`, `service_stopped`, `slicer_unavailable`, `download_unavailable`, `download_id_conflict` |
 
 После HTTP 202 ошибки работы агента/инструментов/слайсинга приходят событиями и сохраняются в состоянии диалога. Отказ инструмента не превращается в успех HTTP-операции над принтером. Внешние детали провайдера не копировать целиком в ответ, особенно заголовки авторизации.
 
@@ -415,7 +526,7 @@ Legacy health/message, MCP и static сохраняют прежние HTTP-ош
 1. Прочитать /api/status; показать реальные возможности и configured, не «LLM подключена». Настройки вводятся только в Qt.
 2. Создать session или восстановить snapshot; отрисовать messages и tool_events, продолжить polling с last_event_id.
 3. Перед отправкой сохранить полное тело с client_message_id. Принять 202 как принятие; отрисовать канонический user из snapshot, без оптимистичного дубликата.
-4. Обрабатывать tool/progress/error и assistant_message. Не отождествлять idle с завершением engine. attachments/downloads отключены.
+4. Обрабатывать tool/progress/error и assistant_message. Не отождествлять idle с завершением engine. Вложения доступны; artifact_ready обновляет карточку по artifact_id, download_url доступен только для подтверждённого native-файла.
 5. При обрыве/5xx сохранить тот же ID, перечитать snapshot и повторять только явным действием с тем же телом. 409 не означает, что можно создать новый ID. При 410 восстановить snapshot. После перезапуска процесса объяснить сброс истории, не повторять изменения.
 
 Временный UI из b9c0190 адаптирован к этому контракту; дальнейший дизайн остаётся задачей frontend. Целевой раздел о файлах не является разрешением включать отсутствующие функции.

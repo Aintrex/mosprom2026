@@ -7,6 +7,10 @@ from ..slicer.models import MODEL_FIELDS, validate_model_arguments
 from ..slicer.slicing import SLICE_FIELDS, validate_slice_arguments
 from ..slicer.exports import EXPORT_FIELDS, validate_export_arguments
 from ..slicer.settings import SETTING_KEYS
+from ..slicer.transforms import TRANSFORM_FIELDS, validate_transform_arguments
+from ..slicer.arrangement import ARRANGEMENT_FIELDS, validate_arrangement_arguments
+from ..uploads import UploadError
+from ..slicer.custom_profiles import CUSTOM_FIELDS, validate_custom_arguments
 
 
 class UnknownToolError(Exception):
@@ -16,21 +20,25 @@ class UnknownToolError(Exception):
 class ToolRegistry(object):
     """Single source of tool schemas for MCP and the future LLM client."""
 
-    def __init__(self, adapter=None):
+    def __init__(self, adapter=None, file_store=None):
         self._adapter = adapter if adapter is not None else SlicerAdapter()
+        self._file_store = file_store
         self._tools = [{
             "name": "assistant_status",
             "description": "Read implementation status; does not inspect the slicer.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}
         }]
         for name, description in (("get_setting", "Прочитать allowlist-настройку глобального или явно указанного экструдерного стека."),
-                                  ("set_setting", "Изменить одну allowlist-настройку целевого userChanges и подтвердить чтением.")):
+                                  ("set_setting", "Изменить одну allowlist-настройку userChanges и подтвердить чтением. Для global передай ровно key,scope,value; extruder_id не передавай даже null. layer_height: value — JSON-число в мм, например {\"key\":\"layer_height\",\"scope\":\"global\",\"value\":0.12}, не строка. Для extruder обязателен строковый runtime extruder_id.")):
             properties = {"key": {"type": "string", "enum": list(SETTING_KEYS)},
-                          "scope": {"type": "string", "enum": ["global", "extruder"]},
-                          "extruder_id": {"type": "string", "minLength": 1}}
+                          "scope": {"type": "string", "enum": ["global", "extruder"],
+                                    "description": "Обязательно явно. global: без extruder_id; extruder: со строковым extruder_id."},
+                          "extruder_id": {"type": "string", "minLength": 1,
+                                          "description": "Только для scope=extruder; при global поле полностью отсутствует."}}
             required = ["key", "scope"]
             if name == "set_setting":
-                properties["value"] = {"type": ["number", "boolean", "string"]}
+                properties["value"] = {"type": ["number", "boolean", "string"],
+                    "description": "Тип зависит от key: float/int — JSON-число, bool — boolean, enum — строка из options. layer_height: число >0 в мм (0.12, не \"0.12\"). Без преобразования строк."}
                 required.append("value")
             self._tools.append({"name": name, "description": description,
                                 "inputSchema": {"type": "object", "properties": properties,
@@ -62,7 +70,7 @@ class ToolRegistry(object):
                 "type": "object", "properties": {field: {"type": "string", "minLength": 1} for field in fields},
                 "required": list(fields), "additionalProperties": False}})
 
-        for name, description in (("start_slicing", "Запустить штатную classic-нарезку; ответ не означает завершения."),
+        for name, description in (("start_slicing", "Запустить штатную classic/cylindrical/cylindrical_full-нарезку; ответ не означает завершения."),
                                   ("get_slicing_status", "Состояние, реальный прогресс и актуальность запуска по slice_id."),
                                   ("get_slicing_result", "Подтверждённые время и расход STE Slicer для актуального завершённого запуска.")):
             fields = SLICE_FIELDS[name]
@@ -84,17 +92,94 @@ class ToolRegistry(object):
                                 "extruder_id": {"type": "string", "minLength": 1}},
                                 "required": ["scope"], "additionalProperties": False}})
 
+        descriptions = {"get_model_state": "Мировые origin/матрица 4x4/габариты и outside верхней модели, Uranium Y-up, мм.",
+                        "move_model": "Штатный Undo-перенос origin верхней модели в абсолютную мировую позицию в мм (Y вверх). Требует отключённой физики сцены.",
+                        "rotate_model": "Штатный относительный поворот верхней модели вокруг мировой оси через её origin, градусы; без физики сцены.",
+                        "scale_model": "Штатное умножение мировых осей масштаба на факторы 0.01–100 с сохранением origin; без физики сцены.",
+                        "delete_model": "Штатное удаление одной верхней модели/группы по ID с Undo; исходный файл не удаляется. Без физики сцены."}
+        for name in ("get_model_state", "move_model", "rotate_model", "scale_model", "delete_model"):
+            properties = {"object_id": {"type": "string", "minLength": 1}}
+            if name in ("move_model", "scale_model"):
+                value = {"type": "number", "minimum": 0.01, "maximum": 100} if name == "scale_model" else {
+                    "type": "number", "minimum": -1000000, "maximum": 1000000}
+                properties["factors" if name == "scale_model" else "position_mm"] = {
+                    "type": "object", "properties": {a: dict(value) for a in ("x", "y", "z")},
+                    "required": ["x", "y", "z"], "additionalProperties": False}
+            if name == "rotate_model":
+                properties.update({"axis": {"type": "string", "enum": ["x", "y", "z"]},
+                                   "angle_degrees": {"type": "number", "minimum": -1000000, "maximum": 1000000}})
+            self._tools.append({"name": name, "description": descriptions[name], "inputSchema": {
+                "type": "object", "properties": properties, "required": list(TRANSFORM_FIELDS[name]), "additionalProperties": False}})
+
+        for name, description in (("arrange_models", "Запустить native ArrangeObjectsJob classic для всей активной платформы; завершение/all_fit читать по ID. Требует отключённых auto-slice и физики."),
+                                  ("get_arrangement_status", "Состояние своего native job, реальные after и штатные границы all_fit; не проверка всех коллизий.")):
+            fields = ARRANGEMENT_FIELDS[name]
+            self._tools.append({"name": name, "description": description, "inputSchema": {
+                "type": "object", "properties": {field: {"type": "string", "minLength": 1} for field in fields},
+                "required": list(fields), "additionalProperties": False}})
+
+        self._tools.append({"name": "load_model_file", "description": "Импорт зарегистрированного STL/OBJ/3MF по file_id с подтверждением native-завершения; путь не принимается.",
+                            "inputSchema": {"type": "object", "properties": {
+                                "file_id": {"type": "string", "minLength": 1, "maxLength": 128}},
+                                "required": ["file_id"], "additionalProperties": False}})
+
+        descriptions = {"list_custom_profiles": "Пользовательские группы текущей машины со стабильными ID/доступностью/активностью.",
+                        "create_custom_profile": "Штатно создать и выбрать новый пользовательский профиль из текущих настроек, подтвердить перенос и хранение.",
+                        "select_custom_profile": "Выбрать доступный пользовательский профиль по ID, сохраняя user overrides.",
+                        "save_custom_profile": "Сохранить текущие overrides только в активный изменяемый custom-профиль и подтвердить его файлы."}
+        for name in ("list_custom_profiles", "create_custom_profile", "select_custom_profile", "save_custom_profile"):
+            fields = CUSTOM_FIELDS[name]
+            self._tools.append({"name": name, "description": descriptions[name], "inputSchema": {
+                "type": "object", "properties": {f: {"type": "string", "minLength": 1,
+                    "maxLength": 80 if f == "name" else 256} for f in fields},
+                "required": list(fields), "additionalProperties": False}})
+
     def list_tools(self):
         return copy.deepcopy(self._tools)
+
+    def argument_rejection(self, name, arguments, message, argument_format):
+        # Type-only diagnostics: no raw values, unknown field names, paths or provider payload.
+        schema = next((t["inputSchema"] for t in self._tools if t["name"] == name), None)
+        summary = {"format": argument_format}
+        if isinstance(arguments, dict) and schema:
+            fields = schema.get("properties", {})
+            def kind(value):
+                if value is None:
+                    return "null"
+                if isinstance(value, bool):
+                    return "boolean"
+                if isinstance(value, (int, float)):
+                    return "number"
+                if isinstance(value, str):
+                    return "string"
+                return "array" if isinstance(value, list) else "object"
+            summary["field_types"] = {key: kind(arguments[key]) for key in fields if key in arguments}
+            summary["missing_fields"] = [key for key in schema.get("required", []) if key not in arguments]
+            summary["unknown_fields_count"] = len(set(arguments) - set(fields))
+        error = {"code": "invalid_tool_arguments", "message": message, "stage": "validation", "executed": False,
+                 "arguments_summary": summary}
+        if schema is not None:
+            error["expected"] = copy.deepcopy(schema)
+        return {"ok": False, "error": error}
 
     def validate(self, name, arguments):
         if name in ("assistant_status", "get_slicer_state"):
             if not isinstance(arguments, dict) or arguments:
                 raise ValueError("%s takes no arguments" % name)
+        elif name in CUSTOM_FIELDS:
+            validate_custom_arguments(name, arguments)
+        elif name == "load_model_file":
+            if (not isinstance(arguments, dict) or set(arguments) != {"file_id"} or
+                    not isinstance(arguments["file_id"], str) or not arguments["file_id"] or len(arguments["file_id"]) > 128):
+                raise ValueError("Нужен один file_id до128 символов")
         elif name in TOOL_FIELDS:
             validate_profile_arguments(name, arguments)
         elif name in MODEL_FIELDS:
             validate_model_arguments(name, arguments)
+        elif name in TRANSFORM_FIELDS:
+            validate_transform_arguments(name, arguments)
+        elif name in ARRANGEMENT_FIELDS:
+            validate_arrangement_arguments(name, arguments)
         elif name in SLICE_FIELDS:
             validate_slice_arguments(name, arguments)
         elif name in EXPORT_FIELDS:
@@ -110,11 +195,26 @@ class ToolRegistry(object):
 
     @staticmethod
     def is_mutating(name):
-        return name in ("set_setting", "set_print_mode", "select_profile", "select_material", "load_model",
-                        "start_slicing", "export_gcode", "save_project_3mf")
+        return name in ("set_setting", "set_print_mode", "select_profile", "select_material", "load_model", "load_model_file",
+                        "create_custom_profile", "select_custom_profile", "save_custom_profile",
+                        "start_slicing", "export_gcode", "save_project_3mf", "move_model", "rotate_model", "scale_model", "delete_model", "arrange_models")
 
     def call(self, name, arguments):
         self.validate(name, arguments)
+        if name == "load_model_file":
+            if self._file_store is None:
+                return {"ok": False, "error": {"code": "file_not_found", "message": "Хранилище вложений не подключено"}}
+            try:
+                lease = self._file_store.model_path(arguments["file_id"])
+            except UploadError as exc:
+                return {"ok": False, "error": {"code": exc.code, "message": exc.message}}
+            # Adapter owns the callback even on an early failure; tool timeout is not reader completion.
+            result = self._adapter.load_model(lease.path, reader_done=lease.close)
+            if result.get("ok"):
+                result = copy.deepcopy(result)
+                result["data"]["file_id"] = arguments["file_id"]
+                result["data"]["file_name"] = lease.metadata["name"]
+            return result
         if name == "assistant_status":
             return {"mode": "scaffold", "llm_connected": False,
                     "slicer_tools_implemented": [tool["name"] for tool in self._tools if tool["name"] != "assistant_status"],

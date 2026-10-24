@@ -309,7 +309,9 @@ class Exports(object):
                 raise SlicerError("export_invalid_file", "Размер готового файла не совпал с проверенным временным файлом")
             os.remove(staging)
             staging = None
-            record.events.put(("published", (directory, name, os.path.getsize(final))))
+            info = os.stat(final)
+            identity = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+            record.events.put(("published", (directory, name, info.st_size, os.path.realpath(final), identity)))
             self._wait(record, record.accept)
         except Exception as exc:
             LOGGER.error("Export filesystem: %s", type(exc).__name__)
@@ -378,13 +380,14 @@ class Exports(object):
                 record.publish_ok = True
                 record.publish.set()
             elif event == "published" and record.state == "running":
-                directory, name, size = data
+                directory, name, size, path, identity = data
                 record.directory = directory
                 record.artifact = {"artifact_id": "artifact-" + uuid.uuid4().hex, "file_name": name, "kind": record.kind,
                                    "size_bytes": size, "slice_id": record.slice_id, "source": "ste_slicer",
                                    "writer_id": "GCodeWriter" if record.kind == "gcode" else "3MFWriter",
                                    "writer_type": "mesh_writer" if record.kind == "gcode" else "workspace_writer"}
-                self.artifacts[record.artifact["artifact_id"]] = dict(record.artifact, local_directory=directory)
+                self.artifacts[record.artifact["artifact_id"]] = dict(record.artifact, local_directory=directory,
+                    _export_id=record.export_id, path=path, identity=identity)
                 record.state, record.accepted = "completed", True
                 record.accept.set()
                 self._retire(record)
@@ -419,6 +422,20 @@ class Exports(object):
         if export_id not in self.records:
             raise SlicerError("export_not_found", "Идентификатор экспорта не найден в текущей сессии")
         return self._data(self.records[export_id])
+
+    def resolve_artifact(self, app, artifact_id):
+        if self.closed:
+            raise SlicerError("slicer_not_connected", "Экспорт закрыт")
+        artifact = self.artifacts.get(artifact_id)
+        if artifact is None:
+            raise SlicerError("artifact_not_found", "Native-артефакт не зарегистрирован")
+        record = self.records.get(artifact["_export_id"])
+        if (record is None or record.state != "completed" or not record.accepted or
+                record.artifact is None or record.artifact["artifact_id"] != artifact_id):
+            raise SlicerError("artifact_not_ready", "Экспорт не принят как завершённый")
+        self.slicing.result(app, record.slice_id)
+        # Trusted strings/metadata only; filesystem checks and streaming belong to the HTTP worker.
+        return dict(record.artifact, path=artifact["path"], identity=artifact["identity"])
 
     def _stop_timer(self):
         if self.timer is not None:

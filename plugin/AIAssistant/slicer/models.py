@@ -165,15 +165,19 @@ class ModelRegistry(object):
         return {"models": [self.item(node) for node in self.nodes(app)]}
 
     def get_bounds(self, app, object_id):
+        node = self.resolve(app, object_id)
+        value = bounds(node)
+        if value is None:
+            raise SlicerError("model_bounds_unavailable", "Мировые границы геометрии объекта недоступны")
+        return {"object_id": object_id, "bounds": value}
+
+    def resolve(self, app, object_id):
         self.nodes(app)
         reference = self._ids.get(object_id)
         node = reference() if reference is not None else None
         if node is None:
             raise SlicerError("model_not_found", "Объект отсутствует в текущей сцене; вызовите list_models")
-        value = bounds(node)
-        if value is None:
-            raise SlicerError("model_bounds_unavailable", "Мировые границы геометрии объекта недоступны")
-        return {"object_id": object_id, "bounds": value}
+        return node
 
     def close(self, app):
         if self.active_load is not None:
@@ -183,7 +187,7 @@ class ModelRegistry(object):
 
 
 class ModelLoad(object):
-    def __init__(self, registry, path, change_lock):
+    def __init__(self, registry, path, change_lock, reader_done=None):
         self.registry, self.path, self.change_lock = registry, path, change_lock
         self._guard = threading.Lock()
         self._phase = "pending"
@@ -195,6 +199,34 @@ class ModelLoad(object):
         self.error = None
         self.loaded_nodes = None
         self.initial_nodes = None
+        self._reader_done = reader_done
+        self._reader_signal = None
+        self._reader_started = False
+
+    def _reader_release(self):
+        with self._guard:
+            callback, self._reader_done = self._reader_done, None
+        if callback is not None:
+            callback()  # FileStore lease.close only changes counters; cleanup is a separate worker.
+
+    def _reader_disconnect(self):
+        # Qt only, independent of finish() and the closed bridge.
+        if self._reader_signal is not None:
+            try:
+                self._reader_signal.disconnect(self._reader_completed)
+            except (TypeError, RuntimeError) as exc:
+                LOGGER.warning("Reader lifetime disconnect: %s", type(exc).__name__)
+            self._reader_signal = None
+
+    def _reader_completed(self, path):
+        if path_key(path) != path_key(self.path):
+            return
+        self._reader_release()
+        if threading.current_thread() is self.main_thread:
+            self._reader_disconnect()
+        else:
+            # No scene access or disconnect from a worker; lifetime no longer depends on bridge.
+            self._reader_app.callLater(self._reader_disconnect)
 
     def _release(self):
         with self._guard:
@@ -212,6 +244,7 @@ class ModelLoad(object):
                 self._phase = "cancelled"
         if pending:
             self._release()
+            self._reader_release()
 
     def start(self, app):
         with self._guard:
@@ -231,6 +264,10 @@ class ModelLoad(object):
                 raise SlicerError("model_preview_active", "Закройте G-code preview перед импортом; штатный загрузчик может очистить сцену")
             self.registry.nodes(app)
             self.registry.active_load = self
+            if self._reader_done is not None:
+                self._reader_app = app
+                self._reader_signal = app.fileCompleted
+                self._reader_signal.connect(self._reader_completed)
             for signal, slot in ((app.fileLoaded, self.on_loaded), (app.fileCompleted, self.on_completed)):
                 signal.connect(slot)
                 self.subscriptions.append((signal, slot))
@@ -241,6 +278,7 @@ class ModelLoad(object):
                 if self._abandoned:
                     raise SlicerError("qt_timeout", "Просроченный запуск импорта отменён")
                 self._phase = "launched"
+                self._reader_started = True
             app.readLocalFile(url, skip_project_file_check=True)
         except Exception as exc:
             with self._guard:
@@ -318,6 +356,9 @@ class ModelLoad(object):
     def finish(self, result=None, error=None):
         # Вызывается только на Qt-потоке, в том числе при позднем завершении.
         self.result, self.error = result, error
+        if not self._reader_started:
+            self._reader_disconnect()
+            self._reader_release()
         for signal, slot in self.subscriptions:
             try:
                 signal.disconnect(slot)

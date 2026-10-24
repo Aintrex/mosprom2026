@@ -19,6 +19,7 @@
         <div class="kv"><span>Режим:</span><strong id="st-mode">—</strong></div>
         <p>Настройки, качество и материалы можно запросить в чате.</p>
         <p id="slice-state">Снимков нарезки ещё нет.</p>
+        <p id="export-state">Своих экспортов ещё нет.</p>
       </section>
 
       <section class="card">
@@ -47,6 +48,11 @@
 
       <div id="messages" class="messages"></div>
 
+      <div id="artifacts" class="attachment-bar" aria-live="polite"></div>
+      <div class="attachment-bar">
+        <label>Вложения (до 5): <input id="chat-files" type="file" multiple accept=".jpg,.jpeg,.png,.stl,.obj,.3mf"></label>
+        <div id="attachment-list" aria-live="polite"></div>
+      </div>
       <form id="chat-form" class="chat-input-bar">
         <textarea id="chat-input" rows="2" maxlength="12000" placeholder="Например: прочитай высоту слоя или состояние STE Slicer..."></textarea>
         <button type="submit" id="btn-send" class="btn primary">Отправить</button>

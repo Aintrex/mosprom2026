@@ -10,13 +10,16 @@ from AIAssistant.server import create_server
 
 
 def main():
-    server = create_server(AgentService())
+    service = AgentService()
+    server = create_server(service)
     print("Scaffold: http://127.0.0.1:%d/" % server.server_port, flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        service.close()
+        service.file_store.wait_closed(20)  # Standalone process only, not the Qt lifecycle.
         server.server_close()
 
 

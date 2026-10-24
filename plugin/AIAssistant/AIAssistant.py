@@ -15,6 +15,7 @@ class AIAssistant(Extension):
         super().__init__()
         self._app = app
         self._server = None
+        self._settings_window = None
         self._adapter = SlicerAdapter(app)
         self._config = PreferencesConfigStore(self._adapter._bridge)
         try:
@@ -42,6 +43,12 @@ class AIAssistant(Extension):
         if self._closed:
             return
         self._closed = True
+        if self._settings_window is not None:
+            dialog = self._settings_window
+            try:
+                self._adapter._bridge.run(lambda app: dialog.reject() if self._settings_window is dialog else None)
+            except Exception as exc:
+                logging.getLogger(__name__).error("LLM Settings close: %s", type(exc).__name__)
         self._service.close()
         self._adapter.close()
         if self._server is not None:
@@ -51,12 +58,22 @@ class AIAssistant(Extension):
 
     def showSettingsDialog(self):
         if not self._closed:
+            # Return to the QML menu before opening a widget; release its input grab.
+            self._app.callLater(self._show_settings_on_qt)
+
+    def _show_settings_on_qt(self):
+        if not self._closed:
             self._adapter._bridge.run(self._settings_dialog)
 
     def _settings_dialog(self, app):
         # UI adapted from artem_backend b9c0190; Preferences use our QtBridge.
         from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QLineEdit,
                                      QPushButton, QHBoxLayout, QCheckBox, QMessageBox)
+        from PyQt5.QtCore import Qt
+        if self._settings_window is not None:
+            self._settings_window.raise_()
+            self._settings_window.activateWindow()
+            return
         try:
             config = self._config.load()
         except Exception as exc:
@@ -65,6 +82,10 @@ class AIAssistant(Extension):
             return
         dialog = QDialog()
         dialog.setWindowTitle("AI Assistant — LLM Settings")
+        # MainWindow in this fork is QQuickWindow, not a QWidget constructor parent.
+        dialog.setWindowModality(Qt.WindowModal)
+        dialog.winId()
+        dialog.windowHandle().setTransientParent(app.getMainWindow())
         layout, form = QVBoxLayout(dialog), QFormLayout()
         url, model, key = QLineEdit(config["base_url"]), QLineEdit(config["model"]), QLineEdit("")
         key.setEchoMode(QLineEdit.Password)
@@ -80,6 +101,8 @@ class AIAssistant(Extension):
         layout.addLayout(buttons)
 
         def on_save():
+            if self._closed or self._settings_window is not dialog:
+                return
             try:
                 self._config.save(url.text(), model.text(), key.text(), clear.isChecked())
             except Exception as exc:
@@ -89,4 +112,20 @@ class AIAssistant(Extension):
             dialog.accept()
         save.clicked.connect(on_save)
         cancel.clicked.connect(dialog.reject)
-        dialog.exec_()
+
+        def on_finished(result):
+            key.clear()
+            if self._settings_window is dialog:
+                self._settings_window = None
+            dialog.deleteLater()
+
+        def focus_url():
+            if not self._closed and self._settings_window is dialog:
+                dialog.raise_()
+                dialog.activateWindow()
+                url.setFocus(Qt.OtherFocusReason)
+
+        dialog.finished.connect(on_finished)
+        self._settings_window = dialog  # open() returns immediately; retain until finished.
+        dialog.open()
+        app.callLater(focus_url)

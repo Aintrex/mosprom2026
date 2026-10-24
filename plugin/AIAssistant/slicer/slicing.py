@@ -1,4 +1,4 @@
-"""Один classic-запуск и последний результат; все методы исполняются на Qt."""
+"""Один запуск разрешённого режима; наблюдение штатных стадий на Qt."""
 import copy
 import logging
 import math
@@ -7,6 +7,8 @@ import time
 
 from .models import model_roots, walk
 from .qt_bridge import SlicerError
+from .cli_slicing import CliStages
+from .full_slicing import FullStages
 
 
 LOGGER = logging.getLogger(__name__)
@@ -32,8 +34,24 @@ def _number(value):
 
 def backend_busy(backend):
     # В этом форке публичного getter нет. Поля только читаются, не изменяются.
-    return bool(backend._slicing or backend._start_slice_job is not None or
-                backend._generate_basement_job is not None or backend._process_layers_job is not None)
+    try:
+        backend_id = backend.getPluginId()
+        if backend_id in ("CLIParserBackend", "CylindricalBackend"):
+            if backend_id == "CLIParserBackend" and type(backend).__name__ != "CliParserBackend":
+                raise SlicerError("backend_state_unavailable", "Не подтверждён тип CLI backend")
+            # Both CLI-based backends have process_cli/Glicer; only the full
+            # CylindricalBackend also prepares a basement. No missing-field fallback.
+            process = backend._glicer_process
+            return bool(backend._slicing or backend._start_slice_job is not None or
+                        backend_id == "CylindricalBackend" and backend._generate_basement_job is not None or
+                        backend._process_cli_job is not None or backend._process_layers_job is not None or
+                        process is not None and process.poll() is None)
+        if backend_id != "CuraEngineBackend":
+            raise SlicerError("backend_state_unavailable", "Для этого backend не подтверждена схема занятости")
+        return bool(backend._slicing or backend._start_slice_job is not None or
+                    backend._generate_basement_job is not None or backend._process_layers_job is not None)
+    except AttributeError:
+        raise SlicerError("backend_state_unavailable", "Не подтверждён поддерживаемый layout занятости backend; запись не разрешена")
 
 
 def _freeze(value):
@@ -107,6 +125,8 @@ class _Run(object):
         self.estimate_epoch = 0
         self.statistics = None
         self.result = None
+        self.final_chunks = None
+        self.printing_mode, self.cli = "classic", None
 
 
 class Slicing(object):
@@ -125,6 +145,9 @@ class Slicing(object):
 
     def _connect(self, record, signal, handler):
         def callback(*args):
+            if self.closed and record.cli is not None:
+                self.app.callLater(self._closed_cli_refresh, record, handler, args)
+                return
             if not self._current(record):
                 return
             if threading.current_thread() is not self.main_thread:
@@ -157,6 +180,7 @@ class Slicing(object):
         record.subscriptions = []
         record.backend = record.stack = record.scene = record.root = record.info = None
         record.manager = record.job = record.buffer = record.old_buffer = record.snapshot = None
+        record.cli = None
 
     def _fail(self, record, code, message):
         if record.state == "completed":
@@ -185,9 +209,12 @@ class Slicing(object):
                 raise SlicerError("no_active_machine", "В STE Slicer не выбрана активная машина")
             manager = app.getBackendManager()
             backend = manager.getCurrentBackend() if manager is not None else None
-            if (stack.getProperty("printing_mode", "value") != "classic" or backend is None or
-                    backend is not manager.getBackendByType("classic")):
-                raise SlicerError("unsupported_slicing_mode", "Для ТЗ 05 требуется classic и соответствующий runtime-backend")
+            mode = stack.getProperty("printing_mode", "value")
+            if (mode not in ("classic", "cylindrical", "cylindrical_full") or backend is None or
+                    backend is not manager.getBackendByType(mode)):
+                raise SlicerError("unsupported_slicing_mode", "Нужен разрешённый режим с соответствующим runtime-backend")
+            if backend.getPluginId() != {"classic": "CuraEngineBackend", "cylindrical": "CLIParserBackend", "cylindrical_full": "CylindricalBackend"}[mode]:
+                raise SlicerError("unsupported_slicing_mode", "Регистрация backend не соответствует поддержанному конвейеру")
             if app.getPreferences().getValue("general/auto_slice"):
                 raise SlicerError("auto_slicing_enabled", "Выключите автоматическую нарезку в UI STE Slicer; плагин не меняет Preferences")
             if backend_busy(backend):
@@ -219,6 +246,9 @@ class Slicing(object):
             record.backend, record.manager, record.stack = backend, manager, stack
             record.scene, record.root, record.info = scene, root, info
             record.plate, record.backend_id = plate, backend.getPluginId()
+            record.printing_mode = mode
+            record.cli = (FullStages(self, record, backend_busy) if mode == "cylindrical_full" else
+                          CliStages(self, record) if mode == "cylindrical" else None)
             record.snapshot = snapshot
             record.states = BackendState
             record.old_buffer = getattr(scene, "gcode_dict", {}).get(plate)
@@ -251,14 +281,16 @@ class Slicing(object):
                 self.timer.timeout.connect(self._tick)
                 self.timer.start()
                 backend.forceSlice()
-                record.force_returned = True
                 record.job = backend._start_slice_job
+                if record.cli is not None:
+                    record.cli.observe()
+                record.force_returned = True
                 self._capture_start(record)
                 app.callLater(self._deferred_refresh, record)
             except Exception as exc:
                 LOGGER.error("Slicing start: %s", type(exc).__name__)
                 self._fail(record, "slicing_failed", "Ошибка API запуска; неизвестно, успел ли backend начать работу")
-                if not backend_busy(backend):
+                if not backend_busy(backend) and not (record.cli is not None and record.cli.busy()):
                     self._release(record)
                     self._detach(record)
                     self._stop_timer()
@@ -311,15 +343,25 @@ class Slicing(object):
         record.job_pending = False
         if record.job is None and record.started_count == 1:
             record.job = record.backend._start_slice_job
+        if record.cli is not None:
+            record.cli.observe()
         self._tick()
 
     def _state(self, record, state):
         if state == record.states.Processing:
+            if record.cli is not None:
+                record.cli.processing()
             record.begun = True
             if record.state == "queued":
                 record.state = "running"
             self._follow_empty_buffer(record)
-        elif state == record.states.Done and record.begun and record.state != "failed":
+        elif state == record.states.Done and record.begun:
+            if record.cli is not None:
+                record.cli.final()
+            if record.state == "failed":
+                return
+            if record.cli is not None and not record.cli.parser_started:
+                return  # Prep/Glicer/old parser Done is not this parser's final callback.
             record.done = True
             self.app.callLater(self._deferred_refresh, record)
         elif state in (record.states.Error, record.states.Disabled):
@@ -335,7 +377,7 @@ class Slicing(object):
         self._fail(record, "slicing_cancelled", "Нарезка отменена backend или пользователем")
 
     def _backend_error(self, record, job=None):
-        if job is not None and record.job is not None and job is not record.job:
+        if job is not None and record.job is not None and job is not record.job and not (record.cli is not None and record.cli.owns(job)):
             return
         self._fail(record, "slicing_failed", "Ошибка подготовки/нарезки STE Slicer; подробности в сообщениях приложения и журнале")
 
@@ -351,6 +393,8 @@ class Slicing(object):
             self._fail(record, "slicing_conflict", "Другой backend обновил оценки той же платформы")
 
     def _estimates(self, record, plate, times, amounts):
+        if record.cli is not None and not record.cli.parser_started:
+            return
         if (not record.begun or plate != record.plate or not isinstance(times, dict) or not times or
                 record.backend._start_slice_job_build_plate != record.plate):
             return
@@ -411,11 +455,17 @@ class Slicing(object):
 
     def _tick(self):
         record = self.record
+        if self.closed:
+            if record is not None and record.cli is not None:
+                self._closed_cli_refresh(record)
+            return
         if record is None or not self._current(record):
             return
         try:
             self._changed(record)
-            busy = backend_busy(record.backend)
+            if record.cli is not None:
+                record.cli.observe()
+            busy = backend_busy(record.backend) or record.cli is not None and record.cli.busy()
             if record.state in ("queued", "running") and self.clock() >= record.deadline:
                 self._fail(record, "slicing_timeout", "Истекли 180 секунд ожидания; это не отмена engine")
             if record.state == "failed":
@@ -425,7 +475,8 @@ class Slicing(object):
                     self._stop_timer()
                 return
             if record.state == "completed":
-                if (getattr(record.scene, "gcode_dict", {}).get(record.plate) is not record.buffer or not record.valid):
+                if (getattr(record.scene, "gcode_dict", {}).get(record.plate) is not record.buffer or not record.valid or
+                        record.final_chunks is not None and tuple(record.buffer) != record.final_chunks):
                     record.valid = False
                     self._detach(record)
                     self._stop_timer()
@@ -439,13 +490,16 @@ class Slicing(object):
                 self._fail(record, "slicing_failed", "Команда запуска вернулась без подтверждённого начала нарезки")
                 return
             self._read_estimates(record)
-            if record.done and record.final_check_ready and not busy and record.buffer is not None and record.statistics is not None:
+            if (record.done and record.final_check_ready and not busy and record.buffer is not None and
+                    record.statistics is not None and (record.cli is None or record.cli.ready())):
                 buffer = getattr(record.scene, "gcode_dict", {}).get(record.plate)
                 if buffer is not record.buffer or not buffer or not any(isinstance(line, str) and line.strip() for line in buffer):
                     self._fail(record, "slicing_failed", "Нет свежих данных G-code захваченного запуска")
                     return
                 record.state, record.valid = "completed", True
-                record.result = {"slice_id": record.slice_id, "printing_mode": "classic", "backend_id": record.backend_id,
+                if record.cli is not None:
+                    record.final_chunks = tuple(buffer)
+                record.result = {"slice_id": record.slice_id, "printing_mode": record.printing_mode, "backend_id": record.backend_id,
                                  "build_plate": record.plate, "source": "ste_slicer"}
                 record.result.update(record.statistics)
                 self.last_completed = record
@@ -457,7 +511,7 @@ class Slicing(object):
     @staticmethod
     def _status_data(record):
         return {"slice_id": record.slice_id, "state": record.state, "progress": record.progress,
-                "printing_mode": "classic", "backend_id": record.backend_id, "build_plate": record.plate,
+                "printing_mode": record.printing_mode, "backend_id": record.backend_id, "build_plate": record.plate,
                 "valid": record.valid, "error": copy.deepcopy(record.error)}
 
     def _find(self, slice_id):
@@ -488,9 +542,38 @@ class Slicing(object):
 
     def close(self, app):
         self.closed = True
-        self._stop_timer()
         if self.record is not None:
             self._fail(self.record, "slicer_not_connected", "Плагин завершает работу; запуск не подтверждён")
+            if self.record.cli is not None:
+                self.record.shutdown_deadline = self.clock() + 30.0
+                self._closed_cli_refresh(self.record)
+                return
             self._release(self.record)
             self._detach(self.record)
+        self._stop_timer()
         self.record = self.last_completed = self.app = None
+
+    def _closed_cli_refresh(self, record, handler=None, args=()):
+        if record is not self.record or record.cli is None:
+            return
+        if self.clock() >= record.shutdown_deadline:
+            record.error = record.error or {"code": "slicer_not_connected", "message": "Плагин закрыт."}
+            record.error["message"] += " За 30 секунд после close выход стадий не подтверждён; наблюдение остановлено, guard сохранён. Перезапустите приложение."
+            self._stop_timer()
+            self._detach(record)
+            self.record = self.last_completed = self.app = None
+            return
+        try:
+            # Only stage refs/flags on Qt, never scene/PI or new engine actions after close.
+            if handler is not None:
+                record.cli.closed_event(handler, args)
+            record.cli.observe()
+            if backend_busy(record.backend) or record.cli.busy():
+                return
+            self._stop_timer()
+            self._release(record)
+            self._detach(record)
+            self.record = self.last_completed = self.app = None
+        except Exception as exc:
+            LOGGER.error("CLI shutdown observation: %s", type(exc).__name__)
+            # Without reliable exit flags keep context/guard; do not invent cancellation.

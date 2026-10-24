@@ -10,7 +10,7 @@ Python-код должен оставаться совместимым с 3.5. P
 
 ## Реализовано в ТЗ 01
 
-ТЗ 01 добавило через `/mcp` инструменты `assistant_status`, `get_setting` и `set_setting` для обязательных `key=layer_height`, `scope=global`, значения в мм. Эти вызовы и форма ответов сохранены. ТЗ 07 расширяет настройки на allowlist и явно выбранный экструдер, см. ниже; остальные настройки и преобразования моделей пока не реализованы. Диагностика/режимы добавлены в ТЗ 02, списки и выбор встроенного качества/материалов — в ТЗ 03, импорт/список моделей — в ТЗ 04, classic-нарезка — в ТЗ 05, штатный экспорт — в ТЗ 06. Вызовы настроек из HTTP выполняются через `app.callLater`, ожидание результата ограничено 5 секундами. Запись возвращает фактически прочитанные `before` и `after`.
+ТЗ 01 добавило через `/mcp` инструменты `assistant_status`, `get_setting` и `set_setting` для обязательных `key=layer_height`, `scope=global`, значения в мм. Эти вызовы и форма ответов сохранены. ТЗ 07 расширяет настройки на allowlist и явно выбранный экструдер, см. ниже; остальные настройки вне allowlist пока не реализованы. Диагностика/режимы добавлены в ТЗ 02, списки и выбор встроенного качества/материалов — в ТЗ 03, импорт/список моделей — в ТЗ 04, classic-нарезка — в ТЗ 05, штатный экспорт — в ТЗ 06, преобразования/удаление с Undo — в ТЗ 08. Вызовы настроек из HTTP выполняются через `app.callLater`, ожидание результата ограничено 5 секундами. Запись возвращает фактически прочитанные `before` и `after`.
 
 Аргументы проверяются до обращения к API. Жёсткие границы берутся из текущего стека; предупреждения профиля не запрещают запись. Если запись не подтверждена чтением, возвращается ошибка. MCP помещает результат `{ok,data}` или `{ok,error}` в JSON-текст `content` и выставляет `isError` при операционной ошибке. Неверные аргументы — JSON-RPC `-32602`.
 
@@ -212,7 +212,7 @@ Invoke-ProfileRpc 'tools/call' @{name='select_profile'; arguments=@{quality_type
 
 ## ТЗ 04: импорт моделей, ID и габариты
 
-Добавлены `load_model {path}`, `list_models {}` и `get_model_bounds {object_id}`. path/object_id — непустые строки, лишние поля запрещены. load_model принимает только абсолютный путь к читаемому обычному локальному STL/OBJ/3MF, **непустому и не больше 50 MiB** (ограничение прототипа). URL, UNC/device/сетевые диски и другие типы отклоняются. Это диагностический MCP-ввод: HTTP-upload и file_id пока отсутствуют, не передавайте LLM произвольный доступ к локальным путям. Файлы проверяются в worker; новый код не возвращает/не логирует полный путь модели. Штатные логи reader могут содержать его.
+Добавлены `load_model {path}`, `list_models {}` и `get_model_bounds {object_id}`. path/object_id — непустые строки, лишние поля запрещены. load_model принимает только абсолютный путь к читаемому обычному локальному STL/OBJ/3MF, **непустому и не больше 50 MiB** (ограничение прототипа). URL, UNC/device/сетевые диски и другие типы отклоняются. Это диагностический MCP-ввод; для чата роли2A/2B используют upload/file_id ниже, не передавайте LLM произвольный доступ к локальным путям. Файлы проверяются в worker; новый код не возвращает/не логирует полный путь модели. Штатные логи reader могут содержать его.
 
 Импорт запускает штатный readLocalFile с `skip_project_file_check=True`: 3MF импортируется как mesh, без workspace-восстановления проекта. Объектные overrides 3MF могут сохраниться. Штатное размещение и автомасштабирование не отключаются, Preferences не меняются. G-code preview блокирует импорт до запуска, чтобы избежать штатного deleteAll.
 
@@ -416,7 +416,7 @@ G-code записывает GCodeWriter из mesh-handler; проект — Thre
 
 Бюджет — 120 секунд; при timeout writer не отменяется, используемый stream и защита сохраняются до его выхода. Поздний finished не публикует ошибочный экспорт. Если штатный декоратор завис после исключения, потребуется перезапуск без автоповтора. Ошибка 3MF после подтверждённого выхода сбрасывает storeArchive; чужой ещё работающий writer не трогается. Подробности: `docs/API_CONTRACT.md`, `docs/reports/TASK_06_REPORT.md`.
 
-Готовые файлы лежат в кэше STE, `AIAssistant/exports/export-<случайная папка>/result.gcode` или `project.3mf`. Точный **local_directory** возвращается только после completed; artifact сообщает ID, имя, kind, размер, slice_id и штатный источник. Каждый запуск создаёт новую папку без перезаписи. Нужные результаты скопируйте, поскольку это кэш. Регистрация ID действует в памяти до перезапуска; HTTP-скачивание пока отсутствует. После изменения проекта исторический файл остаётся связан с прежним slice_id, статус valid=false.
+Готовые файлы лежат в кэше STE, `AIAssistant/exports/export-<случайная папка>/result.gcode` или `project.3mf`. Точный **local_directory** возвращается только после completed; artifact сообщает ID, имя, kind, размер, slice_id и штатный источник. Каждый запуск создаёт новую папку без перезаписи. Нужные результаты скопируйте, поскольку это кэш. Регистрация ID действует в памяти до перезапуска; скачивание из чата добавлено ролью2C ниже. После изменения проекта исторический файл остаётся связан с прежним slice_id, статус valid=false.
 
 **Native-экспорт, Preview и повторное открытие 3MF ещё не проверены. Установленный плагин не обновлялся.** Файлы fake-тестов не являются результатами STE Slicer, в results/ они не создаются. Ручная приёмка ТЗ 03/04/05/06 открыта.
 
@@ -602,13 +602,104 @@ if ($printRestoredGlobal.value -ne $printOriginalGlobal.value -or $printRestored
 
 Сохраните реальные ответы и скриншоты до/после/восстановления для ведущего. Не объявляйте этот сценарий пройденным по тестам с подменами. Старую нарезку после изменения/восстановления повторно актуальной не считать; нужен новый явный start.
 
+## ТЗ 08: преобразования и удаление моделей с Undo
+
+Добавлены get_model_state, move_model, rotate_model, scale_model и delete_model. Формы аргументов/результатов — [API_CONTRACT.md](../docs/API_CONTRACT.md). Используются штатные UM Operations и OperationStack, фактические before/after и мировые mesh-границы. Оси Uranium: Y вверх, X/Z стол. Позиция — абсолютный мировой origin в мм; поворот — относительный вокруг мировой оси через origin, градусы; scale — множители мировых осей (0.01–100), origin сохраняется. Координаты/углы и итоговая геометрия ограничены техническим ±1000000; это не размеры принтера. Непредставимые/вырожденные преобразования отклоняются. Родитель должен иметь единичную мировую матрицу; верхняя преобразованная группа поддерживается целиком, части группы отдельно не адресуются.
+
+Перед изменением/удалением пользователь должен выключить **Automatic drop down** и **push free/автоматическое раздвигание** в настройках STE (physics/automatic_drop_down, physics/automatic_push_free). Иначе явный отказ до push: физика через QTimer 100 мс способна позже опустить origin или переместить соседей. Preferences плагин не меняет. Preview, неактивная платформа, disabled-модель и занятость импорта/нарезки/экспорта/другой записи также запрещают мутацию; чтения доступны.
+
+Успех подтверждается реальной матрицей/позицией и перечитанными габаритами, не одним push. outside_build_area — bool от BuildVolume либо null, если проверка недоступна; выход за пределы возвращает предупреждение, без автопереноса/масштабирования. No-op move/поворот 0 или полный оборот/scale=1 не добавляет историю и не портит native slice. Реальная или неподтверждённая запись инвалидирует старую нарезку/экспорт, Undo не делает старый slice снова актуальным. При таймауте начатая операция может закончиться позже: перечитайте состояние/UI, не повторяйте автоматически. Общий guard остаётся занят до выхода Qt callback. В LLM четыре мутации проходят прежнюю общую классификацию и остановку после ошибки; HTTP/SPA/цикл не менялись.
+
+Ручная приёмка **не выполнена**. После отдельно согласованного обновления всей установленной копии сохраните проект, выберите Hybrid 530 V5.2.4/classic, дождитесь завершения всех job, закройте Preview и выключите обе физические опции в UI. Ниже используются Invoke-Setting и $mcpUrl из сценария ТЗ 01 выше (порт вводится из текущей вкладки). Загружайте отдельную маленькую тестовую деталь, не рабочий проект. Команды выполняйте последовательно со сверкой UI:
+
+```powershell
+$transformPath = Read-Host 'Абсолютный путь к маленькому тестовому STL'
+$transformImport = Invoke-Setting 'load_model' @{path=$transformPath}
+$transformImport | ConvertTo-Json -Depth 15
+$transformObjects = Invoke-Setting 'list_models' @{}
+$transformObjects | ConvertTo-Json -Depth 15
+$transformId = Read-Host 'object_id новой тестовой модели из результата load_model'
+if ($transformId -notin @($transformImport.objects.object_id)) { throw 'ID не принадлежит только что импортированной тестовой модели' }
+$transformBaseline = Invoke-Setting 'get_model_state' @{object_id=$transformId}
+$transformBaseline | ConvertTo-Json -Depth 15
+
+$transformMove = @{x=($transformBaseline.position_mm.x + 10); y=($transformBaseline.position_mm.y + 2); z=$transformBaseline.position_mm.z}
+Invoke-Setting 'move_model' @{object_id=$transformId; position_mm=$transformMove} | ConvertTo-Json -Depth 15
+Invoke-Setting 'get_model_state' @{object_id=$transformId} | ConvertTo-Json -Depth 15
+```
+
+Сверьте origin/габариты/UI; Y API — высота. Выполните штатный Undo в UI и перечитайте state до подтверждения baseline-матрицы и положения. **Не обещается один Undo на один вызов**: OperationStack может объединять соседние операции, включая предыдущее действие пользователя. Если удалился импорт или состояние не восстанавливается ожидаемо — остановитесь и проверьте list_models. Не восстанавливайте обратными углами/Euler или собственной матрицей через API. Далее каждую операцию проверяйте отдельно, возвращаясь штатным Undo к baseline перед следующей:
+
+```powershell
+Invoke-Setting 'rotate_model' @{object_id=$transformId; axis='y'; angle_degrees=90} | ConvertTo-Json -Depth 15
+Invoke-Setting 'get_model_state' @{object_id=$transformId} | ConvertTo-Json -Depth 15
+# Пауза: сверить UI/матрицу/габариты, выполнить Undo в UI и подтвердить baseline.
+```
+
+После подтверждённого Undo:
+
+```powershell
+Invoke-Setting 'scale_model' @{object_id=$transformId; factors=@{x=1.1; y=1; z=1.1}} | ConvertTo-Json -Depth 15
+Invoke-Setting 'get_model_state' @{object_id=$transformId} | ConvertTo-Json -Depth 15
+# Пауза: сверить фактический scale/габариты и неизменный origin, Undo в UI, подтвердить baseline.
+```
+
+После восстановления удалите **только указанную тестовую модель**, проверьте отсутствие ID, сохранность соседей и исходного STL. Затем Undo в UI и новый list_models:
+
+```powershell
+Invoke-Setting 'delete_model' @{object_id=$transformId} | ConvertTo-Json -Depth 15
+Invoke-Setting 'list_models' @{} | ConvertTo-Json -Depth 15
+Invoke-Mcp 'tools/call' @{name='get_model_state'; arguments=@{object_id=$transformId}} | ConvertTo-Json -Depth 15
+# Ожидается model_not_found. Пауза: выполнить штатный Undo в UI.
+```
+
+После Undo выполните list_models снова: объект получает новый ID, старый не переиспользуется. Группу проверяйте отдельным повтором по её верхнему ID; служебные узлы/дети не должны появиться отдельными целями. Дополнительно включите Automatic drop down, попробуйте поднять origin и подтвердите отказ без изменения, затем восстановите обе исходные Preferences вручную. Выход за build area проверяйте только на тестовой детали с допустимыми техническими координатами: ожидаются outside=true/предупреждение и ручной Undo, не обещание печати. При прежнем актуальном slice реальная мутация делает status.valid=false и result stale. Ничего не печатайте; сохраните ответы/скриншоты для ведущего.
+
+Проверены подмены и отдельно классы Uranium с инертными сигналами, **не установленный STE/Qt/физика/UI**. Отчёт — [TASK_08_REPORT.md](../docs/reports/TASK_08_REPORT.md). ТЗ 03–08 и агент требуют своей native-приёмки. Расстановка добавлена отдельно в ТЗ 09 ниже; custom-профили/5D не реализованы.
+
+## ТЗ 09: штатная расстановка classic
+
+arrange_models {} создаёт собственный native ArrangeObjectsJob для всех верхних моделей активной платформы и возвращает arrangement_id/queued; get_arrangement_status {arrangement_id} опрашивает реальный job и after. Одно принятие не означает завершение. Два native finished обрабатываются идемпотентно после isFinished=true/isRunning=false; getResult=None допустим, progress остаётся null, потому что Job.progress этим job не публикуется. Свои чтения/создание/подтверждение — Qt, сам native run — штатная JobQueue, как Arrange All. Плагин не реализует свой упаковщик.
+
+Общий guard держится до фактического выхода job; обычные чтения/status доступны. Бюджет 120 сек; timeout/неопределённый start не отменяет job, не снимает защиту до его выхода и не запускает повтор. Поздний выход не превращает failed в completed, частичные фактические after сохраняются. При зависании нужен перезапуск после сохранения возможного состояния. Shutdown не имитирует отмену: timer останавливается, необходимые job/nodes/finished сохраняются до выхода, если ещё работает Qt event loop. До native start проверяется также остаток обычного Qt-бюджета, чтобы просроченная подготовка не запустила job позже.
+
+**completed — завершение job, не подтверждение полного размещения.** Native не возвращает found_solution_for_all. Непоместившаяся модель ставится в X=200, который может быть внутри большого стола. Поэтому all_fit=true не выдаётся: false при подтверждённом outside=true; иначе null, включая all outside=false. Без перемещения подтверждённый false не теряется. Перечитайте реальные after/границы и штатное сообщение/UI; плагин не доказывает отсутствие всех пересечений. Если матрицы вообще не изменились, есть предупреждение о неподтверждённом применении операции. valid — актуальность сохранённого снимка, а не пригодность печати; после изменения/следующей расстановки false.
+
+Нужны Hybrid 530 V5.2.4/classic и соответствующий backend, auto_slice=false и обе physics-опции=false, свободные импорт/backend/export, закрытый Preview, enabled/selectable верхние модели/группы под единичными мировыми родителями. Все печатные части группы — на активной платформе. Нужны готовые native convex hull/head hull и BuildVolume. Модель шире/глубже стола отклоняет весь запуск, без тихого пропуска. Пустая платформа — empty_scene, job не создаётся. Другие платформы/служебные узлы не передаются native job. min_offset=max(getEdgeDisallowedSize()+2,8); штатное опускание на стол и удаление ZOffset допустимы, отдельная PlatformPhysics запрещена. Preferences не меняются.
+
+Ручная приёмка **не выполнена**. После отдельно согласованного обновления всего плагина: сохраните проект, выключите auto-slice/Automatic drop down/push free в UI, загрузите 2–3 небольших STL вручную или MCP-командами ТЗ 04 на одной classic-платформе. Дождитесь готовности hull, не двигайте модели и не меняйте платформу параллельно. Используются текущий порт, Invoke-Setting и Invoke-Mcp из сценария ТЗ 01:
+
+```powershell
+$arrangeBeforeModels = Invoke-Setting 'list_models' @{}
+$arrangeBeforeModels | ConvertTo-Json -Depth 15
+$arrangeBefore = @($arrangeBeforeModels.models | ForEach-Object {
+    Invoke-Setting 'get_model_state' @{object_id=$_.object_id}
+})
+$arrangeBefore | ConvertTo-Json -Depth 20
+$arrangeStart = Invoke-Setting 'arrange_models' @{}
+$arrangeId = $arrangeStart.arrangement_id
+$arrangeStart | ConvertTo-Json -Depth 20
+$arrangeClientDeadline = (Get-Date).AddSeconds(150)
+do {
+    $arrangeStatus = Invoke-Setting 'get_arrangement_status' @{arrangement_id=$arrangeId}
+    $arrangeStatus | ConvertTo-Json -Depth 25
+    if ($arrangeStatus.state -in @('completed','failed')) { break }
+    if ((Get-Date) -ge $arrangeClientDeadline) { throw 'Клиентский timeout: native job не отменён. Сохраните ID, проверьте UI; не запускайте повтор' }
+    Start-Sleep -Seconds 1
+} while ($true)
+if ($arrangeStatus.state -eq 'failed') { throw ($arrangeStatus | ConvertTo-Json -Depth 25 -Compress) }
+Invoke-Setting 'list_models' @{} | ConvertTo-Json -Depth 15
+```
+
+Сверьте каждый object_id/before/after, реальные X/Y/Z/габариты, опускание на стол и сохранность моделей других платформ. progress:null — ожидаемо. all_fit:null не заменяйте успехом; проверьте штатное сообщение и вид сцены. outside=true/all_fit=false означает неподходящее размещение. Сохраните вывод/скриншоты. Выполните штатный Undo в UI до подтверждённого before, учитывая возможное объединение native operations; после Undo перечитайте get_model_state по тем же живым ID. valid прежнего снимка должен стать false. Для дальнейшей проверки снова явно расставьте/сверьте сцену, затем отдельно используйте сценарий ТЗ 05 для новой classic-нарезки — прежний slice остаётся stale. Ничего не печатайте и не запускайте реальные LLM-запросы автоматически. Восстановление physics/auto-slice — вручную после теста. Отчёт — [TASK_09_REPORT.md](../docs/reports/TASK_09_REPORT.md).
+
 ## Настройка LLM и асинхронный чат — интеграция b9c0190
 
 В меню **AI Assistant -> LLM Settings** задайте Base URL OpenAI-совместимого Chat Completions API, имя модели и ключ; значений по умолчанию нет. Клиент добавляет /chat/completions к URL, если путь ещё не указан. TLS проверяется стандартной библиотекой, redirects с Authorization запрещены. Не помещайте ключ в URL. Настройки хранятся в Preferences ai_assistant/base_url, model, api_key через тот же QtBridge, сохранение подтверждается перечитыванием. Парольное поле при открытии пустое: пусто при Save — сохранить прежний ключ, отдельный флажок — удалить. При ошибке/таймауте кеш считается неподтверждённым; перечитайте через повторное открытие диалога, не повторяйте изменение автоматически. Используется Preferences по требованиям проекта. Браузеру доступны лишь configured/has_key, не значения настроек.
 
-**Open chat** открывает временный UI коллеги b9c0190, адаптированный к [контракту](../docs/API_CONTRACT.md). Сообщение принимается HTTP 202, tools и ответ приходят polling через /api/events. История/карточки восстанавливаются из session snapshot при обновлении страницы; после перезапуска плагина память диалога сбрасывается. Один активный запрос для общей сцены; бюджеты 8 LLM / 16 tools / 120 сек, сеть до 30 сек с учётом остатка. При неопределённой мутации цикл останавливается и сообщает о необходимости проверки UI; автоповтора нет. При обрыве/5xx сохраняется исходный client_message_id, явный повтор отправляет то же тело. Вопрос «Что умеешь?» допускает только чтения. Диагностический load_model(path) и assistant_status исключены из LLM, остальные схемы — существующий единый ToolRegistry. Модель пока загрузите вручную или диагностическими MCP-командами ТЗ 04.
+**Open chat** открывает временный UI коллеги b9c0190, адаптированный к [контракту](../docs/API_CONTRACT.md). Сообщение принимается HTTP 202, tools и ответ приходят polling через /api/events. История/карточки восстанавливаются из session snapshot при обновлении страницы; после перезапуска плагина память диалога сбрасывается. Один активный запрос для общей сцены; бюджеты 8 LLM / 16 tools / 120 сек, сеть до 30 сек с учётом остатка. При неопределённой мутации цикл останавливается и сообщает о необходимости проверки UI; автоповтора нет. При обрыве/5xx сохраняется исходный client_message_id, явный повтор отправляет то же тело. Вопрос «Что умеешь?» допускает только чтения. Диагностический load_model(path) и assistant_status исключены из LLM, остальные схемы — существующий единый ToolRegistry. Приложенную модель агент может импортировать через load_model_file по file_id; прямой MCP-вызов path сохранён для диагностики.
 
-Статус «LLM настроена» не подтверждает связь с провайдером. Снимок нарезки — последний реально прочитанный tool-результат; фонового мониторинга engine между turn нет. Завершение ответа/лимит агента не завершает engine и не подтверждает экспорт. Запросите статус по slice_id, затем актуальный результат; время/материал берутся из STE. Вложения, HTTP-скачивание, преобразования и 5D-нарезка не добавлены. Старый /api/message остаётся отдельным legacy-демо, SPA его не вызывает.
+Статус «LLM настроена» не подтверждает связь с провайдером. Роль2D автоматически читает собственные принятые slice/export ID после idle/ошибки/лимита LLM; время/материал получает прежним result API из STE, готовую download-карточку — через2C. Это не сканирование ручных/MCP-запусков и не автоматический start/export. Завершение ответа агента не завершает engine. Вложения и HTTP-скачивание добавлены в2B/2C ниже; 5D-реализация ТЗ10/11 требует native-приёмки; преобразования доступны с ограничениями ТЗ 08 выше. Старый /api/message остаётся отдельным legacy-демо, SPA его не вызывает.
 
 Проверки разработчика без провайдера/ключа:
 
@@ -620,6 +711,213 @@ git diff --check
 ```
 
 Отчёт — [AGENT_INTEGRATION_REPORT.md](../docs/reports/AGENT_INTEGRATION_REPORT.md). После согласованного обновления установленной копии нужна отдельная native-приёмка: register/shutdown, Qt-диалог и сохранение после перезапуска; вопрос без изменений; чтение слоя, явная допустимая запись/сверка UI/восстановление; затем подготовленная небольшая модель classic и актуальные slice/result/экспорт/Preview/повторное открытие 3MF. Команды ТЗ 01–07 выше сохранены. В этом заходе провайдер не вызывался, ключи не вводились, установленный плагин не менялся. ТЗ 03–07 и LLM-сценарий вручную не приняты.
+
+## Роль 2A: загрузка файла
+
+POST `/api/files` принимает один multipart file и возвращает 201 с file_id, именем, kind, размером и MIME. Модель — до 50 MiB, изображение — до 5 MiB, суммарно 250 MiB на процесс; расширения JPG/JPEG/PNG/STL/OBJ/3MF. Байты проверяются и сохраняются вне Qt в приватном временном каталоге, ID действуют до остановки сервиса. GET по upload-ID отсутствует; native download использует отдельный реестр2C. Сам upload не импортирует модель; передача агенту и минимальный picker подключены ролью2B ниже.
+
+Пример ручного запроса к уже запущенному dev-серверу или текущему порту плагина (сам по себе слайсинг/LLM не запускает):
+
+```powershell
+$uploadPort = [int](Read-Host 'Текущий порт из адреса чата')
+$uploadPath = Read-Host 'Абсолютный путь тестового STL/OBJ/3MF/JPG/PNG'
+$uploadForm = 'file=@"{0}"' -f $uploadPath.Replace('\', '/')
+curl.exe --include --max-time 30 --form $uploadForm "http://127.0.0.1:$uploadPort/api/files"
+```
+
+Ожидается 201 и JSON без локального пути; повторная загрузка получает новый ID. Файл для примера должен иметь обычное имя без кавычек. Для браузерного клиента используйте FormData из [контракта](../docs/API_CONTRACT.md), не задавая boundary вручную. Проверки и ограничения — [ROLE_02A_REPORT.md](../docs/reports/ROLE_02A_REPORT.md). Установленная копия не обновлялась; native-приёмка ТЗ 03/04 остаётся открыта.
+
+## Роль 2B: вложения в чате
+
+Выберите до5 JPG/JPEG/PNG/STL/OBJ/3MF, дождитесь загрузки каждого файла. Уберите ошибочные/лишние файлы кнопкой «Убрать», затем отправьте текст. Суммарно изображения сообщения — до10MiB. Фото передаются как фактический base64 image_url, модель — метаданными и инструментом `load_model_file {file_id}` через существующий adapter/QtBridge. Ключ задаётся только в Qt-настройках. Ошибка vision провайдера не подменяется анализом.
+
+Имена/метаданные восстанавливаются из snapshot. При обрыве/5xx сохраняется полное pending-тело, включая порядок IDs и client_message_id; явный повтор после обновления страницы не перезагружает файлы и не повторяет уже принятое действие. «Убрать» исключает файл из сообщения, физический файл остаётся в ограниченной квоте до закрытия сервиса. После перезапуска процесса IDs неизвестны. Скачивание native-экспортов добавлено2C ниже, upload не раздаётся.
+
+Для отдельной ручной приёмки после согласованного обновления установленной копии и настройки провайдера: приложить небольшой STL и PNG, отправить «Загрузи эту модель и объясни фото». Сверить tool load_model_file, подтверждённые objects/границы и появление объекта в STE; затем обновить страницу и сверить имена вложений/историю без повторного импорта. Upload201/принятие202/текст LLM не доказывают импорт. При ошибке/timeout не повторять мутацию; перечитать list_models/UI. В этом заходе этот сценарий не запускался.
+
+Ограничение lifetime: launched reader удерживает свой файл до фактического fileCompleted даже после timeout/закрытия плагина; при отсутствии сигнала возможен временный остаток. Сцена может показывать серверное имя файла; переименование объектов не добавлено. Итоговые проверки/границы — [ROLE_02B_REPORT.md](../docs/reports/ROLE_02B_REPORT.md).
+
+## ТЗ 10: цилиндрическая нарезка (5D Spiral)
+
+`start_slicing` поддерживает classic/CuraEngineBackend и cylindrical/CLIParserBackend, проверяя регистрацию для режима; cylindrical_full пока отклоняется. Схемы/status/result/экспорт прежние, printing_mode захватывается из запуска. Весь штатный конвейер запускает forceSlice: prep → Glicer → ProcessCliJob → CLIParser. ProcessCliJob.Finished, выход Glicer, progress1 и Done различаются; completed требует собственного финального parser callback, отложенного readback окончательного G-code и подтверждённых оценок PrintInformation. Постоянный процесс парсера может оставаться живым после успеха. Ошибка сокета/процесса/стадии и отсутствие финала дают ошибку/timeout, без расчёта своих оценок.
+
+Во время нарезки не меняйте проект/режим и не запускайте параллельный Slice в UI. Auto-slice заранее выключить вручную; одна непустая активная платформа, без G-code preview. Timeout180с не отменяет engine; guard удерживается до выхода стадий. При close CLI наблюдает свои jobs/Glicer на Qt ещё до30с без scene/PI/новых engine-действий; затем наблюдение прекращается, неизвестный исход/guard сохраняются, нужен перезапуск. Если event loop исчез, cleanup не гарантируется.
+
+Ручные команды ниже **не выполнялись**. После отдельно согласованного обновления установленной копии сохраните проект; выберите Hybrid530 V5.2.4 и cylindrical на пустой тестовой сцене. Если нет активации/engine или модель не подходит, остановитесь и запишите отказ, не обходите его. Ниже самостоятельный MCP-вызов к текущему порту чата. При кодах ошибок/timeout не повторяйте мутацию автоматически.
+
+```powershell
+$spiralPort = [int](Read-Host 'Порт из адреса открытого чата')
+$spiralMcpUrl = "http://127.0.0.1:$spiralPort/mcp"
+function Invoke-SpiralTool($name, $arguments) {
+    $rpc = @{jsonrpc='2.0'; id=10; method='tools/call'; params=@{name=$name; arguments=$arguments}} | ConvertTo-Json -Depth 30 -Compress
+    $response = Invoke-RestMethod $spiralMcpUrl -Method Post -ContentType 'application/json; charset=utf-8' -TimeoutSec 15 -Body ([Text.Encoding]::UTF8.GetBytes($rpc))
+    if ($null -ne $response.error) { throw ($response.error | ConvertTo-Json -Compress) }
+    $envelope = $response.result.content[0].text | ConvertFrom-Json
+    if ($response.result.isError -or -not $envelope.ok) { throw ($envelope | ConvertTo-Json -Depth 30 -Compress) }
+    $envelope.data
+}
+$spiralState = Invoke-SpiralTool 'get_slicer_state' @{}
+if ($spiralState.printing_mode -ne 'cylindrical' -or -not $spiralState.backend.matches_mode) {
+    throw 'Выберите cylindrical в UI и проверьте зарегистрированный CLIParserBackend'
+}
+$spiralPath = Read-Host 'Абсолютный путь небольшой подходящей модели STL/OBJ/3MF'
+$spiralLoaded = Invoke-SpiralTool 'load_model' @{path=$spiralPath}
+$spiralLoaded | ConvertTo-Json -Depth 25
+Invoke-SpiralTool 'describe_settings' @{scope='global'} | ConvertTo-Json -Depth 25
+# Пауза: сверить модель/границы/настройки с UI, без preview.
+$spiralStart = Invoke-SpiralTool 'start_slicing' @{}
+$spiralId = $spiralStart.slice_id
+if ([string]::IsNullOrEmpty($spiralId)) { throw 'Нет slice_id; перечитайте UI без повторного start' }
+$spiralWatch = [Diagnostics.Stopwatch]::StartNew()
+do {
+    $spiralStatus = Invoke-SpiralTool 'get_slicing_status' @{slice_id=$spiralId}
+    $spiralStatus | ConvertTo-Json -Depth 25
+    if ($spiralStatus.state -eq 'failed') { throw ($spiralStatus.error | ConvertTo-Json -Compress) }
+    if ($spiralStatus.state -eq 'completed') { break }
+    if ($spiralWatch.Elapsed.TotalSeconds -ge 195) { throw 'Клиентский timeout; job не отменён, не повторяйте start' }
+    Start-Sleep -Seconds 1
+} while ($true)
+$spiralResult = Invoke-SpiralTool 'get_slicing_result' @{slice_id=$spiralId}
+$spiralResult | ConvertTo-Json -Depth 25
+if ($spiralResult.printing_mode -ne 'cylindrical' -or $spiralResult.backend_id -ne 'CLIParserBackend') { throw 'Неверный контекст результата' }
+```
+
+После сверки времени/расхода с UI выполните export_gcode/save_project_3mf и polling get_export_status по сценарию ТЗ06, подставив **этот** spiralId. Открывайте готовый G-code в Preview и 3MF именно как workspace-проект, сравнивайте cylindrical/машину/материалы/выбранные настройки/геометрию; открытие может сделать прежний slice stale. Сохраните реальные ответы/скриншоты. Затем отдельно повторите classic-сценарий ТЗ05/06 как регрессию на сохранённой тестовой сцене. Это не физическая печать. ТЗ03/04 и все native-результаты остаются открыты. Отчёт и границы — [TASK_10_REPORT.md](../docs/reports/TASK_10_REPORT.md).
+
+## ТЗ 11: составной полный 5D
+
+Добавлен cylindrical_full/CylindricalBackend, при сохранённых classic/cylindrical. Это штатный внешний forceSlice: prep → основание → Cura → Glicer/ProcessCliJob → parser. Только финальный outer parser Done и отложенный readback окончательного G-code/PI подтверждают completed; child Done, Cura Processing0.5, enumFinished и progress1 недостаточны. У полного backend нет собственного parser _process/_socket: требуются зарегистрированные/инициализированные свободные child Cura/CLI sockets; если их нет, будет отказ до запуска. Плагин их вручную не создаёт. Basement имеет result=None; его не проверяют по enum prep/ProcessCliJob. Оценки читает только подтверждённый outer→PrintInformation; своими формулами они не заменяются.
+
+Законные reset childsocket/process наблюдаются после собственного finished соответствующей стадии; поздние подмены — ошибка. Guard сохраняет активную свою фазу и после outer._slicing=false. Timeout/shutdown не отменяют native job; после close только readonly стадийное наблюдение до30с без scene/PI/новых engine-действий, затем неизвестный исход/guard и перезапуск. Приёмка/ограничения — [TASK_11_REPORT.md](../docs/reports/TASK_11_REPORT.md).
+
+Самостоятельные PowerShell-команды ниже подготовлены, **не запускались**. После согласованного обновления установленной копии сохраните проект, выберите Hybrid530 и cylindrical_full на пустой тестовой сцене, выключите auto-slice, без preview. Сначала загрузите небольшую подходящую модель через UI или прежний load_model, подтвердите list_models/габариты и настройки. Отсутствие активации/движка/подходящей модели записать как блокер, без обхода.
+
+```powershell
+$fullPort = [int](Read-Host 'Текущий порт чата')
+$fullUrl = "http://127.0.0.1:$fullPort/mcp"
+function Invoke-FullTool($name, $arguments) {
+    $rpc = @{jsonrpc='2.0'; id=11; method='tools/call'; params=@{name=$name; arguments=$arguments}} | ConvertTo-Json -Depth 30 -Compress
+    $response = Invoke-RestMethod $fullUrl -Method Post -ContentType 'application/json; charset=utf-8' -TimeoutSec 15 -Body ([Text.Encoding]::UTF8.GetBytes($rpc))
+    if ($response.error) { throw ($response.error | ConvertTo-Json -Compress) }
+    $result = $response.result.content[0].text | ConvertFrom-Json
+    if ($response.result.isError -or -not $result.ok) { throw ($result | ConvertTo-Json -Depth 30 -Compress) }
+    $result.data
+}
+$fullState = Invoke-FullTool 'get_slicer_state' @{}
+if ($fullState.printing_mode -ne 'cylindrical_full' -or -not $fullState.backend.matches_mode) { throw 'Сверьте полный режим/регистрацию в UI' }
+Invoke-FullTool 'list_models' @{} | ConvertTo-Json -Depth 30
+Invoke-FullTool 'describe_settings' @{scope='global'} | ConvertTo-Json -Depth 30
+$fullStart = Invoke-FullTool 'start_slicing' @{}
+$fullId = $fullStart.slice_id
+if ([string]::IsNullOrEmpty($fullId)) { throw 'Нет slice_id; проверьте UI без повторного запуска' }
+$fullWatch = [Diagnostics.Stopwatch]::StartNew()
+do {
+    $fullStatus = Invoke-FullTool 'get_slicing_status' @{slice_id=$fullId}
+    $fullStatus | ConvertTo-Json -Depth 30
+    if ($fullStatus.state -eq 'failed') { throw ($fullStatus.error | ConvertTo-Json -Compress) }
+    if ($fullStatus.state -eq 'completed') { break }
+    if ($fullWatch.Elapsed.TotalSeconds -ge 195) { throw 'Клиентский timeout; это не отмена, не повторяйте start' }
+    Start-Sleep -Seconds 1
+} while ($true)
+$fullResult = Invoke-FullTool 'get_slicing_result' @{slice_id=$fullId}
+$fullResult | ConvertTo-Json -Depth 30
+if ($fullResult.printing_mode -ne 'cylindrical_full' -or $fullResult.backend_id -ne 'CylindricalBackend') { throw 'Неверный контекст результата' }
+```
+
+Сверьте оценки с UI, затем выполните существующий сценарий ТЗ06 export_gcode/save_project_3mf/get_export_status с **этим fullId**. Проверьте реальный G-code в Preview и повторно откройте3MF как workspace, сверив полный режим/машину/геометрию/настройки и материалы. После сохранения тестовой работы отдельно повторите classic и cylindrical как регрессию. JSON/файлы/скриншоты сохранить для ведущего. Принтер не запускать; ручная приёмка ТЗ03/04 и новых режимов остаётся открыта.
+
+## ТЗ12: пользовательские профили
+
+Добавлены `list_custom_profiles {}`, `create_custom_profile {name}`, `select_custom_profile {profile_id}`, `save_custom_profile {profile_id}`. Create переносит текущие old qualityChanges+userChanges глобального/экструдерных стеков в новую группу и отдельно выбирает её; очищенные overrides подтверждаются readback. Save — только в активную полную writable группу, без перезаписи встроенных профилей. Коллизия имени — явный отказ. Select сохраняет user overrides; прежний builtin select_profile не изменён и активный custom автоматически не сбрасывает.
+
+memory_verified/disk_verified в persistence различаются: для create/save подтверждаются значения и соответствие QC-файлов native serialize, для select файлы не проверяются. restart_verified всегдаfalse до ручного прогона. Сохранение QC-файлов не является принудительным сохранением активного выбора/всех userChanges/Preferences. Ни void, ни True/dirty сами по себе не подтверждают disk. При ошибке partial-состояние остаётся, error.actual показывает последнюю подтверждённую фазу; не повторяйте создание автоматически.
+
+Native LocalContainerProvider/SaveFile пишет синхронно на Qt и может ждать ОС. Worker ожидает ограниченно; при running-timeout guard сохраняется до выхода native callback, без дальнейших save после abandonment. Собственная ограниченная проверка файлов — вне Qt; raw значения/пути браузеру не выдаются. Отчёт — [TASK_12_REPORT.md](../docs/reports/TASK_12_REPORT.md).
+
+PowerShell ниже подготовлен, **не запускался**. После согласованного обновления установленной копии сохраните работу, выберите тестовую машину/сцену без нарезки/импорта/экспорта и сохраните исходные настройки/UI. Профиль должен быть временным и уникальным. Все ошибки останавливают последовательность, без повторов и автоматического отката.
+
+```powershell
+$profilePort = [int](Read-Host 'Текущий порт чата')
+$profileUrl = "http://127.0.0.1:$profilePort/mcp"
+function Invoke-CustomTool($name, $arguments) {
+    $rpc = @{jsonrpc='2.0'; id=12; method='tools/call'; params=@{name=$name; arguments=$arguments}} | ConvertTo-Json -Depth 30 -Compress
+    $response = Invoke-RestMethod $profileUrl -Method Post -ContentType 'application/json; charset=utf-8' -TimeoutSec 15 -Body ([Text.Encoding]::UTF8.GetBytes($rpc))
+    if ($response.error) { throw ($response.error | ConvertTo-Json -Compress) }
+    $result = $response.result.content[0].text | ConvertFrom-Json
+    if ($response.result.isError -or -not $result.ok) { throw ($result | ConvertTo-Json -Depth 30 -Compress) }
+    $result.data
+}
+$profilesBefore = Invoke-CustomTool 'list_custom_profiles' @{}
+$profilesBefore | ConvertTo-Json -Depth 30
+$originalCustom = $profilesBefore.profiles | Where-Object active | Select-Object -First 1
+$newProfile = Invoke-CustomTool 'create_custom_profile' @{name=('AI_TEST_' + [guid]::NewGuid().ToString('N'))}
+$newProfile | ConvertTo-Json -Depth 30
+Invoke-CustomTool 'set_setting' @{key='layer_height'; scope='global'; value=0.24} | ConvertTo-Json -Depth 30
+$savedProfile = Invoke-CustomTool 'save_custom_profile' @{profile_id=$newProfile.profile_id}
+$savedProfile | ConvertTo-Json -Depth 30
+if (-not $savedProfile.persistence.disk_verified) { throw 'Файлы не подтверждены' }
+if ($originalCustom) { Invoke-CustomTool 'select_custom_profile' @{profile_id=$originalCustom.profile_id} | ConvertTo-Json -Depth 30 }
+# Если исходный профиль builtin, переключиться на него штатным UI (builtin tool custom не сбрасывает).
+Invoke-CustomTool 'select_custom_profile' @{profile_id=$newProfile.profile_id} | ConvertTo-Json -Depth 30
+Invoke-CustomTool 'get_setting' @{key='layer_height'; scope='global'} | ConvertTo-Json -Depth 30
+```
+
+Сверить выбранную группу/ID/слой и материалы экструдеров в UI. Сохранить profile_id/имя/ответы отдельно, перезапустить STE штатно, взять **новый порт** и снова определить функцию. Через list_custom_profiles найти тот же ID, выбрать его и прочитать layer_height=0.24, проверить прежние global/extruder перенесённые значения. Только этот прогон подтвердит восстановление после рестарта. Вернуть исходный профиль/настройки штатным UI либо его custom ID и сверить; временный профиль удаляется пользователем через UI после приёмки, инструмент удаления не добавлен. Рестарт/настоящая запись в установленном STE здесь не выполнялись.
+
+## Роль2C: скачивание native-экспорта
+
+После выполненного агентом либо observer его собственного экспорта get_export_status с completed/valid=true карточка native-артефакта получает стабильные file_id/download_url. GET `/api/files/{file_id}` перепроверяет актуальный slice через QtBridge, затем вне Qt открывает доверенный обычный файл и сверяет принятую идентичность/размер; передача блоками до64KiB без ServiceLock/engine guard. Upload-хранилище не используется, accepted exports не удаляются при его очистке. Dev сообщает downloads=false, plugin=true означает наличие механизма, а не готовность engine/лицензии. Наблюдение своих запусков добавлено ролью2D ниже; принятая копия296 его не имеет.
+
+Неизвестный/upload/исчезнувший ID —404; stale/изменённый файл —409; закрытие/недоступный Qt —503 с JSON до начала тела. Во время передачи ошибка закрывает соединение без JSON. Close запрещает новые GET, уже открытый поток может закончиться. Fingerprint dev/ino/size/mtime_ns не является криптографической защитой от внешнего редактора с сохранением mtime; изменения после начала передачи её не отзывают. Download-ID не переживает рестарт, файлы остаются в кэше STE. Известный stale скрывает ссылку; ручное изменение обнаруживается при следующем чтении/GET.
+
+Результат изолированных проверок:296 Python/10 JS OK (база286/8 сохранена). Проверены bytes/MIME обоих типов, headers/ошибки/close/streaming и snapshot/410/дедупликация. Fake native writer/ScriptedLLM не подтверждают STE/провайдер/Preview/reopen. Отчёт — [ROLE_02C_REPORT.md](../docs/reports/ROLE_02C_REPORT.md).
+
+Самостоятельный ручной сценарий ниже **не выполнялся**. После отдельно согласованного обновления установленной копии и настройки провайдера сохранить проект и пройти прежний native-сценарий ТЗ05/06 (либо10/11): завершённая актуальная нарезка → штатный export → polling get_export_status. Для каждого вида (G-code и3MF) взять собственный completed export_id. Ошибка/timeout останавливает сценарий; автоматического повтора writer нет. Затем в этом же чате явно попросить агента: «Прочитай только get_export_status для export_id …». Дождаться tool_finished и карточки; прямой MCP tools/call сам download URL не регистрирует. Кнопка «Скачать» должна сохранить тот же файл. Обновить вкладку: карточка/ID сохраняются, повторное чтение не дублирует её.
+
+Следующие команды проверяют уже полученную ссылку без нового LLM-запроса и без повторного экспорта. Session ID взять в DevTools → Application → Local Storage → ste_ai_session_id текущего origin, не старого порта.
+
+```powershell
+$downloadPort = [int](Read-Host 'Текущий порт открытого чата')
+$downloadOrigin = "http://127.0.0.1:$downloadPort"
+$downloadSession = Read-Host 'ste_ai_session_id текущего чата'
+$downloadExportId = Read-Host 'Подтверждённый completed export_id'
+$downloadRpc = @{jsonrpc='2.0'; id=13; method='tools/call'; params=@{name='get_export_status'; arguments=@{export_id=$downloadExportId}}} | ConvertTo-Json -Depth 20 -Compress
+$downloadResponse = Invoke-RestMethod "$downloadOrigin/mcp" -Method Post -ContentType 'application/json; charset=utf-8' -TimeoutSec 15 -Body ([Text.Encoding]::UTF8.GetBytes($downloadRpc))
+if ($downloadResponse.error) { throw ($downloadResponse.error | ConvertTo-Json -Compress) }
+$downloadEnvelope = $downloadResponse.result.content[0].text | ConvertFrom-Json
+if ($downloadResponse.result.isError -or -not $downloadEnvelope.ok) { throw ($downloadEnvelope | ConvertTo-Json -Depth 20 -Compress) }
+$downloadNative = $downloadEnvelope.data
+if ($downloadNative.state -ne 'completed' -or -not $downloadNative.valid) { throw 'Нет актуального completed native-экспорта' }
+$downloadSnapshot = Invoke-RestMethod "$downloadOrigin/api/sessions/$downloadSession" -TimeoutSec 15
+$downloadCard = @($downloadSnapshot.artifacts | Where-Object { $_.artifact_id -eq $downloadNative.artifact.artifact_id })
+if ($downloadCard.Count -ne 1 -or -not $downloadCard[0].valid -or $downloadCard[0].download_url -notmatch '^/api/files/[A-Za-z0-9_-]{1,128}$') { throw 'Нет подтверждённой ссылки; агент должен прочитать статус этого экспорта' }
+$downloadTarget = Read-Host 'Абсолютный путь НОВОГО файла для скачивания (.gcode либо .3mf)'
+if (-not [IO.Path]::IsPathRooted($downloadTarget) -or (Test-Path -LiteralPath $downloadTarget)) { throw 'Укажите новый абсолютный путь без перезаписи' }
+curl.exe --fail --show-error --max-time 120 --output $downloadTarget "$downloadOrigin$($downloadCard[0].download_url)"
+if ($LASTEXITCODE -ne 0) { throw 'Скачивание не подтверждено; частичный файл не считать результатом' }
+$downloadSource = Join-Path $downloadNative.local_directory $downloadNative.artifact.file_name
+if ((Get-Item -LiteralPath $downloadTarget).Length -ne $downloadNative.artifact.size_bytes) { throw 'Размер отличается' }
+if ((Get-FileHash -LiteralPath $downloadTarget -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $downloadSource -Algorithm SHA256).Hash) { throw 'Байты отличаются от native-файла' }
+Get-Item -LiteralPath $downloadTarget | Select-Object Name,Length
+```
+
+Повторить для второго вида с его export_id и новым целевым путём. Скачанный G-code открыть штатным Preview, 3MF — как workspace-проект; сверить геометрию/режим/машину/настройки/материалы. Открытие проекта может сделать прежний slice stale: после сохранения доказательств проверить отказ409 старой ссылки и известный valid=false при следующем чтении статуса, без повторного writer. Сохранить ответы/размеры/хеши/скриншоты для ведущего. Установка, провайдер, Preview, повторное открытие3MF и ТЗ03/04 этим заходом не принимались; физическую печать не запускать.
+
+## Роль2D: автоматическое чтение собственных операций
+
+После успешного start_slicing/export_gcode/save_project_3mf агента один ленивый worker процесса продолжает чтение status/result примерно раз в1с, даже когда ответ LLM завершён/ошибочен/достиг лимита. Только подтверждённые ID и их session_id; максимум две active-записи (slice/export), без LLM-запросов, start/retry/export цепочек и сканирования исторических IDs. Прямой MCP/ручной UI автоматически не регистрируются. Готовый экспорт получает download-карточку через прежний2C resolver. Native pipeline/writers/guard/бюджеты и лимиты LLM8/16/120 прежние.
+
+Две строки UI восстанавливаются из snapshot: slice с подтверждёнными оценками и один последний собственный export. export_progress — реальный снимок, не фальшивый tool_finished; pending не является артефактом. observation.watching/finished/stopped отделяет состояние наблюдения от состояния engine. При4 ошибках чтения после backoff1/2/4с — observation_interrupted и прекращение опроса, без выдуманного failed/cancel. Ранний slice_not_ready/qt_timeout от result не снимает живое наблюдение. Известная мутация/новый ID отсекают поздний ответ по поколению; prewrite busy (включая switch_in_progress) сохраняет observer. После terminal постоянного наблюдения внешних изменений нет, GET скачивания заново проверяет актуальность. Close не join-ит ожидающий Qt worker и не отменяет engine.
+
+capabilities.background_slice_events=true только в plugin, в dev=false; это возможность своих наблюдений, не доказательство native-готовности. Принятая копия `tmp/acceptance/baseline_296/AIAssistant`/manifest сохранена (29 хешей совпадают), установленный плагин не обновлялся. Подробности/проверки — [ROLE_02D_REPORT.md](../docs/reports/ROLE_02D_REPORT.md).
+
+Отдельный ручной сценарий новой версии **не выполнялся**: после согласованного обновления/настройки провайдера явно запустить небольшую нарезку агентом, дождаться idle и без нового сообщения проверить изменение прогресса→completed→оценки STE; затем явно запустить writer агентом и дождаться export_progress→artifact_ready/скачивания без следующего LLM-call. Сверить UI/Preview/reopen по прежним командам. Проверить reload/cursor recovery и ошибку наблюдения без автоповтора. Копия296 текущего ручного прогона имеет прежние снимки; её результаты не подтверждают2D. Никаких реальных LLM/engine/принтера этим заданием не запускалось, ТЗ03/04 и native-приёмка остаются открыты.
+
+## Исправление окна LLM Settings
+
+Окно открывается на следующем Qt-tick асинхронно, с transient owner к главному QQuickWindow, модальностью окна и фокусом URL. Повторный вызов поднимает тот же диалог, поздние focus/Save после закрытия игнорируются. Preferences/ключ/пустое значение/удаление ключа прежние. Гипотеза исходного отказа ввода — nested-loop/input grab из QML-меню; реальная причина требует ручного подтверждения в STE. Шесть адресных fake-Qt проверок и полный321 Python прошли; это не native-ввод.
+
+Для проверки пользователь после сохранения проекта/закрытия STE и backup может заменить **только установленный AIAssistant.py** из canonical (совместим с baseline296, без включения2D) либо **всю canonical plugin/AIAssistant** (включая2D, отдельная приёмка). Для иной старой/альтернативной копии совместимость одного файла не подтверждена. Перезапустить STE и проверить ввод/Tab/вставку/Отмена/сохранение тестовых настроек без отправки чата. Frozen baseline_296/manifest не заменять и не считать содержащими fix. Точные шаги — [FIX_LLM_SETTINGS_REPORT.md](../docs/reports/FIX_LLM_SETTINGS_REPORT.md). Автоматической установки или реального LLM-запроса не было.
 
 ## Проверка
 

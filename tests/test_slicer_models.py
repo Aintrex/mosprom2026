@@ -410,13 +410,29 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(self.app.fileLoaded.slots, [])
 
     def test_loading_uses_one_budget_including_initial_queue_delay(self):
-        began = time.monotonic()
-        worker = self.worker(lambda: self.adapter.load_model(self.path))
-        callback = self.app.callbacks.get(timeout=1)
-        time.sleep(0.15)
-        callback()
-        self.assert_error(self.pump_until_done(worker), "model_load_timeout")
-        self.assertLess(time.monotonic() - began, 0.36)
+        clock, budgets = [0.0], []
+        fake_time = types.SimpleNamespace(monotonic=lambda: clock[0])
+        original_run, original_check = self.adapter._bridge.run, models.ModelLoad.check
+        def run(operation, timeout=None):
+            budgets.append(timeout)
+            return original_run(operation, timeout=timeout)
+        def check(operation, app):
+            result = original_check(operation, app)
+            clock[0] = self.adapter._load_timeout  # Deadline after a completed Qt check, not a queue race.
+            return result
+        with mock.patch("AIAssistant.slicer.adapter.time", fake_time), \
+                mock.patch("AIAssistant.slicer.qt_bridge.time", fake_time), \
+                mock.patch.object(self.adapter._bridge, "run", side_effect=run), \
+                mock.patch.object(models.ModelLoad, "check", check):
+            worker = self.worker(lambda: self.adapter.load_model(self.path))
+            callback = self.app.callbacks.get(timeout=1)
+            clock[0] = 0.15  # Simulate time spent in the initial Qt queue.
+            callback()
+            self.app.callbacks.get(timeout=1)()
+            self.assert_error(self.finish(worker), "model_load_timeout")
+        self.assertAlmostEqual(budgets[0], self.adapter._load_timeout)
+        self.assertAlmostEqual(budgets[1], self.adapter._load_timeout - 0.15)
+        self.assertEqual(len(budgets), 2)  # No fresh budget after queue delay.
         self.app.complete([])
 
     def test_timeout_after_start_retains_job_lock_then_late_completion_cleans_up(self):

@@ -123,3 +123,5 @@ input, textarea {
   gap: 10px;
 }
 .chat-input-bar textarea { flex: 1; resize: none; }
+.attachment-bar { padding: 10px 20px; background: #1e293b; font-size: 13px; }
+.attachment-bar button { margin-left: 10px; }
