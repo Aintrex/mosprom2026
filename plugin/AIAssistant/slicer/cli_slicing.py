@@ -8,6 +8,10 @@ class CliStages(object):
         self.old_process = record.backend._glicer_process
         self.prep, self.cli, self.process = None, None, None
         self.prep_done, self.cli_done, self.parser_started = False, False, False
+        # Set by the native final Done of this parser. After it CliParserBackend lets the
+        # parser exit and recreates its socket/process (_onSocketError -> _terminate ->
+        # _createSocket); gcode_dict is kept, so those events are not a failure.
+        self.finished = False
         self.exitcode = None
         try:
             self.parser, self.socket = record.backend._process, record.backend._socket
@@ -21,7 +25,7 @@ class CliStages(object):
             raise SlicerError("backend_state_unavailable", "Не подтверждён layout процесса/сокета CLIParser")
 
     def _socket_error(self, record, error):
-        if error.getErrorCode() != self.debug_error:
+        if error.getErrorCode() != self.debug_error and not self.finished:
             self._fail("slicing_parser_failed", "Ошибка соединения CLIParser; результат не подтверждён")
 
     def _fail(self, code, message):
@@ -53,6 +57,8 @@ class CliStages(object):
     def observe(self):
         r, backend = self.record, self.record.backend
         parser, socket = backend._process, backend._socket
+        if self.finished:
+            return  # Post-finish parser restart is native; the result buffer is checked by the owner.
         if self.parser is None:
             self.parser = parser
         elif parser is not self.parser:
@@ -111,11 +117,11 @@ class CliStages(object):
             self.parser_started = True
 
     def ready(self):
-        return (self.prep_done and self.cli_done and self.exitcode == 0 and self.parser_started and
-                self.parser is not None and self.parser.poll() is None and self.socket is not None)
+        return self.prep_done and self.cli_done and self.exitcode == 0 and self.parser_started and self.finished
 
     def final(self):
-        pass  # Standalone CLI exit is already covered by backend flags and its own jobs.
+        if self.parser_started:
+            self.finished = True
 
     def closed_event(self, handler, args):
         pass

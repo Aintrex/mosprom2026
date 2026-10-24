@@ -305,7 +305,7 @@
     list_custom_profiles: "Пользовательские профили", create_custom_profile: "Создание профиля", select_custom_profile: "Выбор пользовательского профиля",
     save_custom_profile: "Сохранение профиля", start_slicing: "Запуск нарезки", get_slicing_status: "Состояние нарезки",
     get_slicing_result: "Результат нарезки", export_gcode: "Экспорт G-code", save_project_3mf: "Сохранение проекта 3MF", get_export_status: "Состояние экспорта",
-    wait_for_slicing: "Ожидание нарезки", wait_for_export: "Ожидание записи файла"};
+    wait_for_slicing: "Ожидание нарезки", wait_for_export: "Ожидание записи файла", center_model: "Центрирование модели"};
   function modeText(mode) { return labelFrom({classic: "Классический (3D)", cylindrical: "5D Spiral (цилиндрический)", cylindrical_full: "Полный 5D"}, mode) || valueText(mode); }
   function stateText(state) { return labelFrom({queued: "Принято, ожидает запуска", running: "Выполняется", completed: "Завершено", failed: "Ошибка"}, state) || "Состояние не подтверждено"; }
   function progressText(progress) { return number(progress) && progress >= 0 && progress <= 1 ? "Прогресс: " + Math.round(progress * 100) + "%" : "Прогресс не сообщён"; }
@@ -439,7 +439,7 @@
     if (name === "list_custom_profiles" && Array.isArray(data.profiles)) return ["Пользовательских профилей: " + data.profiles.length];
     if (name === "list_quality_profiles" && Array.isArray(data.profiles)) return ["Профилей качества: " + data.profiles.length];
     if (name === "list_materials" && Array.isArray(data.materials)) return ["Материалов: " + data.materials.length];
-    if (/^(move|rotate|scale)_model$/.test(name) && data.object_id && typeof data.changed === "boolean") return transformLines(data);
+    if (/^(move|rotate|scale|center)_model$/.test(name) && data.object_id && typeof data.changed === "boolean") return transformLines(data);
     if (name === "delete_model" && data.removed === true) return ["Модель удалена из сцены (исходный файл не тронут). Отмена: Ctrl+Z в STE Slicer."];
     if (name === "get_model_state" && data.object_id && data.position_mm) return ["ID объекта: " + data.object_id,
       "Позиция X / Y / Z: " + ["x", "y", "z"].map(function (axis) { return valueText(data.position_mm[axis]); }).join(" / ") + " мм", boundsText(data.bounds)];
@@ -486,12 +486,15 @@
     } else paragraphs(item.body, finished ? lines || ["Ответ получен, но формат результата не распознан. Подтверждение операции смотрите в технических деталях."] :
       ["Запрос передан инструменту. Результат ещё не получен."]);
     if (failedState) paragraphs(item.body, ["Проверьте сообщения STE Slicer и состояние по ID. Не повторяйте запуск автоматически."]);
+    if (finished && result.argument_admission && result.argument_admission.field) {
+      paragraphs(item.body, ["Модель прислала " + result.argument_admission.field + " строкой; плагин разобрал его как число. Фактическое значение — выше, по чтению из STE."]);
+    }
     if (finished && Array.isArray(result.argument_coercions) && result.argument_coercions.length) {
       paragraphs(item.body, ["Аргументы модели исправлены перед запуском: " + result.argument_coercions.join("; ") + "."]);
     }
     if (finished && result.ok === true) {
       if (data.name === "load_model_file" && result.data) markImported(result.data.file_id);
-      if (/^(load_model_file|load_model|move_model|rotate_model|scale_model|delete_model|get_arrangement_status|set_print_mode)$/.test(data.name)) sceneSoon();
+      if (/^(load_model_file|load_model|move_model|rotate_model|scale_model|center_model|delete_model|get_arrangement_status|set_print_mode)$/.test(data.name)) sceneSoon();
     }
     technical(item.card, {tool: data.name, arguments: item.started ? item.arguments : "Не опубликованы", result: finished ? result : "Ожидается"});
   }
@@ -651,7 +654,7 @@
   // Scene panel: live objects through the same MCP registry (no new REST routes, no JS file access).
   var elSceneList = document.getElementById("scene-list"), elSceneStatus = document.getElementById("scene-status");
   var elSceneResult = document.getElementById("scene-result"), elSceneReason = document.getElementById("scene-reason");
-  var sceneControls = ["btn-rotate", "btn-move", "btn-scale", "btn-delete-model"].map(function (id) { return document.getElementById(id); });
+  var sceneControls = ["btn-rotate", "btn-move", "btn-scale", "btn-center-model", "btn-delete-model"].map(function (id) { return document.getElementById(id); });
   var sceneTimer = null;
   function rpc(name, args) {
     return post("/mcp", {jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: {name: name, arguments: args || {}}}).then(function (body) {
@@ -802,6 +805,9 @@
     });
     if (errors.length) { sceneOutcome("Проверьте ввод", errors.concat(["Сцена не менялась."]), "fail"); return; }
     sceneAction("scale_model", {object_id: sceneChoice, factors: factors}, "Масштаб");
+  });
+  document.getElementById("btn-center-model").addEventListener("click", function () {
+    sceneAction("center_model", {object_id: sceneChoice}, "Центрирование");
   });
   document.getElementById("btn-delete-model").addEventListener("click", function () {
     var chosen = sceneModels.filter(function (model) { return model.object_id === sceneChoice; })[0];

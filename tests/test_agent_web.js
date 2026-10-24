@@ -658,14 +658,14 @@ async function main() {
   assert.match(sceneApp.elements["scene-status"].textContent, /больше не существует/, "A vanished ID is dropped, never reused");
   assert(sceneApp.elements["btn-rotate"].disabled);
   const admissionSnapshot = Object.assign(idle(), {messages: [{message_id: "numeric-notice", role: "assistant", event_id: 2,
-    text: "Для value выполнен явный разбор числовой строки на границе LLM. Причина строкового типа не установлена; это не подтверждение записи."}],
+    text: "Высота слоя изменена на 0,12 мм."}],
     tool_events: [{id: 1, type: "tool_finished", data: {name: "set_setting", tool_call_id: "parsed", result: {ok: true,
       data: {key: "layer_height", before: 0.1, after: 0.12, unit: "mm"},
       argument_admission: {field: "value", from_type: "string", to_type: "number", reason: "strict_json_number_literal", stage: "llm_boundary"}}}}], last_event_id: 2});
   const admissionApp = harness(path => ({code: 200, body: path === "/api/status" ? status : admissionSnapshot}));
   await settle();
-  assert.match(visibleText(admissionApp.elements.messages), /явный разбор числовой строки/);
-  assert.match(visibleText(admissionApp.elements.messages), /Причина строкового типа не установлена/);
+  assert.match(visibleText(admissionApp.elements.messages), /value строкой; плагин разобрал его как число/, "Repair is explained in the card");
+  assert.match(visibleText(admissionApp.elements.messages), /0,1 → 0,12/);
   assert.match(nodes(admissionApp.elements.messages, "details")[0].textContent, /strict_json_number_literal/);
   assert(!admissionApp.requests.some(r => r.options && r.options.method === "POST" && !readOnlyRpc(r)));
   const stagedSnapshot = toolSnapshot([

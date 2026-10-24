@@ -130,7 +130,7 @@ class _Run(object):
 
 
 class Slicing(object):
-    def __init__(self, change_lock, budget=180.0):
+    def __init__(self, change_lock, budget=600.0):
         self.lock, self.budget = change_lock, budget
         self.clock = time.monotonic
         self.record, self.last_completed = None, None
@@ -188,7 +188,7 @@ class Slicing(object):
             return
         if record.state != "failed":
             record.state, record.valid = "failed", False
-            record.error = {"code": code, "message": message + " Пока backend занят, изменения заблокированы. Дождитесь выхода/нажмите Stop в UI; при отсутствии завершения перезапустите приложение."}
+            record.error = {"code": code, "message": message + " Если STE ещё показывает нарезку, дождитесь её окончания или нажмите Stop; изменения сцены до этого заблокированы. Затем нарезку можно запустить заново."}
 
     def invalidate(self):
         if self.record is not None:
@@ -382,6 +382,8 @@ class Slicing(object):
         self._fail(record, "slicing_failed", "Ошибка подготовки/нарезки STE Slicer; подробности в сообщениях приложения и журнале")
 
     def _quit(self, record, *args):
+        if record.done:
+            return  # 5D parsers exit after their final Done; the buffer check decides validity.
         self._fail(record, "slicing_failed", "Процесс backend завершился до получения результата")
 
     def _pi_changed(self, record, index):
@@ -467,7 +469,7 @@ class Slicing(object):
                 record.cli.observe()
             busy = backend_busy(record.backend) or record.cli is not None and record.cli.busy()
             if record.state in ("queued", "running") and self.clock() >= record.deadline:
-                self._fail(record, "slicing_timeout", "Истекли 180 секунд ожидания; это не отмена engine")
+                self._fail(record, "slicing_timeout", "Истекли %d секунд ожидания; это не отмена engine" % self.budget)
             if record.state == "failed":
                 if not busy:
                     self._release(record)

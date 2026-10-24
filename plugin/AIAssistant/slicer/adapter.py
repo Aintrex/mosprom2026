@@ -25,7 +25,7 @@ _UNSET = object()
 
 
 class SlicerAdapter(object):
-    def __init__(self, app=None, timeout=5.0, load_timeout=60.0, slicing_timeout=180.0, export_timeout=120.0, arrangement_timeout=120.0):
+    def __init__(self, app=None, timeout=5.0, load_timeout=60.0, slicing_timeout=600.0, export_timeout=120.0, arrangement_timeout=120.0):
         # Constructed by Extension on the Qt thread; dev mode has no app.
         self._bridge = QtBridge(app, timeout) if app is not None else None
         self._timeout = timeout

@@ -363,6 +363,22 @@ class FullTests(unittest.TestCase):
         self.drain()
         self.assertEqual(self.status()["error"]["code"], "slicing_conflict")
 
+    def test_child_engines_exit_after_final_done_keep_valid_result(self):
+        # Same native pattern as 5D Spiral: engines may exit/restart after delivering output.
+        self.parser()
+        self.backend.parser_data()
+        self.backend.finish()
+        for name in ("CuraEngineBackend", "CLIParserBackend"):
+            child = self.backend.children[name]
+            child._socket.error.emit(types.SimpleNamespace(getErrorCode=lambda: 2))
+            self.backend.reset_child(name)
+        self.backend.backendQuit.emit()
+        self.drain()
+        status = self.status()
+        self.assertEqual((status["state"], status["valid"]), ("completed", True), status)
+        self.assertTrue(self.adapter.get_slicing_result(self.slice_id)["ok"])
+        self.assertFalse(self.adapter._change_lock.locked())
+
     def test_parser_child_exit_and_old_child_socket_not_final(self):
         old = self.backend.children["CLIParserBackend"]._socket
         self.parser()

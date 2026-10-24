@@ -473,6 +473,26 @@ class TransformTests(unittest.TestCase):
         self.assertTrue(any("опускание" in w for w in response["data"]["warnings"]))
         self.assertEqual(self.physics["physics/automatic_drop_down"], True)
 
+    def test_center_model_moves_bounds_centre_to_bed_centre_keeping_height(self):
+        tools = ToolRegistry(self.adapter)
+        self.assertTrue(self.adapter.rotate_model(self.object_id, "x", 90)["ok"])
+        before = self.state()
+        result = tools.call("center_model", {"object_id": self.object_id})
+        self.assertTrue(result["ok"], result)
+        after = self.state()
+        for axis in ("x", "z"):
+            self.assertAlmostEqual(after["bounds"]["min"][axis] + after["bounds"]["max"][axis], 0, places=6)
+        self.assertAlmostEqual(after["position_mm"]["y"], before["position_mm"]["y"])
+        self.assertEqual(len(self.ops.operations), 2)  # One native rotate + one native move, both undoable.
+        again = tools.call("center_model", {"object_id": self.object_id})
+        self.assertEqual((again["ok"], again["data"]["changed"]), (True, False))
+        self.assertEqual(len(self.ops.operations), 2)
+        self.assertTrue(ToolRegistry.is_mutating("center_model"))
+        for bad in ({}, {"object_id": ""}, {"object_id": self.object_id, "x": 0}):
+            with self.assertRaises(ValueError):
+                tools.validate("center_model", bad)
+        self.assertEqual(tools.call("center_model", {"object_id": "stale"})["error"]["code"], "model_not_found")
+
     def test_outside_is_warning_not_printability_and_unknown_remains_null(self):
         response = self.adapter.move_model(self.object_id, {"x": 200, "y": 0, "z": 0})
         self.assertTrue(response["ok"], response)

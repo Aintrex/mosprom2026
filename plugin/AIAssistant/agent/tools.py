@@ -81,7 +81,7 @@ class ToolRegistry(object):
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}
         }, {
             "name": "set_print_mode",
-            "description": "Переключить режим и подтвердить настройку и runtime-backend. Использовать на пустой сцене.",
+            "description": "Переключить режим печати и подтвердить настройку и runtime-backend. Модели на сцене сохраняются; прежняя нарезка становится неактуальной. После смены на 5D проверь постановку модели (center_model).",
             "inputSchema": {"type": "object", "properties": {"mode": {"type": "string", "enum": list(PRINT_MODES)}},
                             "required": ["mode"], "additionalProperties": False}
         }])
@@ -179,6 +179,10 @@ class ToolRegistry(object):
                 "type": "object", "properties": {field: {"type": "string", "minLength": 1},
                                                  "max_seconds": {"type": "integer", "minimum": 1, "maximum": MAX_WAIT_SECONDS}},
                 "required": [field], "additionalProperties": False}})
+
+        self._tools.append({"name": "center_model", "description": "Поставить центр габаритов модели в центр стола (мировые x=0, z=0) штатным переносом с Undo; высота не меняется. Нужен для 5D: ось тела вращения должна проходить через стержень-основание в центре стола.",
+                            "inputSchema": {"type": "object", "properties": {"object_id": {"type": "string", "minLength": 1}},
+                                            "required": ["object_id"], "additionalProperties": False}})
 
     @staticmethod
     def coerce_llm_arguments(name, arguments):
@@ -331,6 +335,10 @@ class ToolRegistry(object):
             validate_profile_arguments(name, arguments)
         elif name in MODEL_FIELDS:
             validate_model_arguments(name, arguments)
+        elif name == "center_model":
+            if (not isinstance(arguments, dict) or set(arguments) != {"object_id"} or
+                    not isinstance(arguments["object_id"], str) or not arguments["object_id"]):
+                raise ValueError("Укажите только object_id (непустая строка)")
         elif name in TRANSFORM_FIELDS:
             validate_transform_arguments(name, arguments)
         elif name in ARRANGEMENT_FIELDS:
@@ -364,16 +372,37 @@ class ToolRegistry(object):
             result["data"]["wait_finished"] = data.get("state") in ("completed", "failed")
         return result
 
+    def _center(self, object_id):
+        """Bounds centre to the bed centre (world x=0, z=0) via the native move; height is kept.
+
+        The origin is not the bounds centre after rotations, so the target origin is derived
+        from the live readback. move_model re-checks the object, context and result itself.
+        """
+        state = self._adapter.get_model_state(object_id)
+        if not state.get("ok"):
+            return state
+        data = state["data"]
+        box, origin = data["bounds"], data["position_mm"]
+        target = {"x": origin["x"] - (box["min"]["x"] + box["max"]["x"]) / 2.0, "y": origin["y"],
+                  "z": origin["z"] - (box["min"]["z"] + box["max"]["z"]) / 2.0}
+        if abs(target["x"] - origin["x"]) < 1e-3 and abs(target["z"] - origin["z"]) < 1e-3:
+            return {"ok": True, "data": {"object_id": object_id, "before": data, "after": data, "changed": False,
+                                         "warnings": ["Модель уже по центру стола"]}}
+        return self._adapter.move_model(object_id, target)
+
     @staticmethod
     def is_mutating(name):
         return name in ("set_setting", "set_print_mode", "select_profile", "select_material", "load_model", "load_model_file",
                         "create_custom_profile", "select_custom_profile", "save_custom_profile",
-                        "start_slicing", "export_gcode", "save_project_3mf", "move_model", "rotate_model", "scale_model", "delete_model", "arrange_models")
+                        "start_slicing", "export_gcode", "save_project_3mf", "move_model", "rotate_model", "scale_model", "delete_model", "arrange_models",
+                        "center_model")
 
     def call(self, name, arguments):
         self.validate(name, arguments)
         if name in WAIT_TOOLS:
             return self._wait(name, arguments)
+        if name == "center_model":
+            return self._center(arguments["object_id"])
         if name == "load_model_file":
             if self._file_store is None:
                 return {"ok": False, "error": {"code": "file_not_found", "message": "Хранилище вложений не подключено"}}

@@ -6,7 +6,7 @@ from unittest import mock
 import test_agent_integration as integration
 from AIAssistant.agent.llm import ChatCompletionsClient, LLMError, mcp_tools_to_openai
 from AIAssistant.agent.mcp import dispatch
-from AIAssistant.agent.service import json_arguments, NUMERIC_ARGUMENT_NOTICE
+from AIAssistant.agent.service import json_arguments
 from AIAssistant.slicer.qt_bridge import SlicerError
 from AIAssistant.slicer.settings import SETTING_TYPES
 
@@ -46,10 +46,10 @@ class NumericArgumentsTests(unittest.TestCase):
                 if isinstance(value, str):
                     self.assertEqual(first["argument_admission"], {"field": "value", "from_type": "string", "to_type": "number",
                         "reason": "strict_json_number_literal", "stage": "llm_boundary"})
-                    self.assertTrue(self.snapshot()["messages"][-1]["text"].startswith(NUMERIC_ARGUMENT_NOTICE))
+                    self.assertNotIn("разбор числовой строки", self.snapshot()["messages"][-1]["text"])  # Shown in the card, not the answer.
                 else:
                     self.assertNotIn("argument_admission", first)
-                    self.assertNotIn(NUMERIC_ARGUMENT_NOTICE, self.snapshot()["messages"][-1]["text"])
+                    self.assertNotIn("разбор числовой строки", self.snapshot()["messages"][-1]["text"])
 
     def test_same_string_direct_mcp_and_adapter_remain_strict(self):
         with mock.patch.object(self.adapter, "set_setting", side_effect=AssertionError("Must reject before API")):
@@ -147,7 +147,7 @@ class NumericArgumentsTests(unittest.TestCase):
         self.assertEqual(self.app.stack.writes, [("layer_height", 0.12)])
         self.assertEqual([r["error"]["code"] for r in self.results()], ["qt_timeout", "tool_not_executed"])
         self.assertEqual(len(self.llm.requests), 1)
-        self.assertTrue(self.snapshot()["messages"][-1]["text"].startswith(NUMERIC_ARGUMENT_NOTICE))
+        self.assertNotIn("разбор числовой строки", self.snapshot()["messages"][-1]["text"])  # Shown in the card, not the answer.
 
     def test_network_timeout_after_repaired_write_does_not_retry(self):
         self.service(integration.calls(integration.tool("set_setting", self.arguments())), LLMError("network_timeout", "Не получен ответ"))

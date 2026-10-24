@@ -78,13 +78,19 @@ class FullStages(object):
             return
         endpoint["socket"], endpoint["process"], endpoint["active"] = socket, process, True
         def error(record, event):
+            if self._settled(endpoint):
+                return  # A stage that already delivered its result may drop its connection.
             if socket is backend._socket and event.getErrorCode() != self.debug_error:
                 self._fail("slicing_parser_failed", "Ошибка socket подчинённого backend полного режима")
         self.owner._connect(self.record, socket.error, error)
         self._refresh()
 
+    def _settled(self, endpoint):
+        # Cura is settled once Glicer started from its output; the parser after the final Done.
+        return self.parser_done or endpoint is self.cura and self.cura_done
+
     def _observe_endpoint(self, endpoint):
-        if not endpoint["active"] or endpoint["resetting"]:
+        if not endpoint["active"] or endpoint["resetting"] or self._settled(endpoint):
             return
         backend, process = endpoint["backend"], endpoint["process"]
         if backend._socket is not endpoint["socket"]:
@@ -197,8 +203,9 @@ class FullStages(object):
                 self.parser_started and not self.parser_done and (self.parser["process"] is None or self._live(self.parser)))
 
     def ready(self):
+        # Child engines may exit/restart after delivering their stage; liveness is not required.
         return (self.prep_done and self.basement_done and self.cura_done and self.cli_done and self.exitcode == 0 and
-                self.parser_started and self.parser_done and self._live(self.cura) and self._live(self.parser))
+                self.parser_started and self.parser_done)
 
     def owns(self, job):
         return job is self.prep or job is self.basement or job is self.cli

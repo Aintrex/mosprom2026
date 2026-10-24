@@ -322,6 +322,29 @@ class CliTests(unittest.TestCase):
                 self.adapter._slicing._tick()
                 self.backend._process.code = None
 
+    def test_parser_exit_and_socket_restart_after_final_done_still_complete(self):
+        # Observed in STE 7.10.12: progress 1.0, then CLIParser exits and the native
+        # _onSocketError -> _terminate -> _createSocket restarts it. The result stands.
+        for late in (False, True):
+            with self.subTest(after_readback=late):
+                self.parser()
+                self.backend.parser_data()
+                self.backend.finish()
+                if late:
+                    self.drain()
+                    self.assertEqual(self.status()["state"], "completed")
+                self.backend._process.code = 0
+                self.backend._socket.error.emit(types.SimpleNamespace(getErrorCode=lambda: 2))
+                self.backend.backendQuit.emit()
+                self.backend._process = Process()
+                self.backend._socket = types.SimpleNamespace(error=base.Signal(self.app))
+                self.drain()
+                status = self.status()
+                self.assertEqual((status["state"], status["valid"]), ("completed", True), status)
+                result = self.adapter.get_slicing_result(self.slice_id)
+                self.assertTrue(result["ok"], result)
+                self.assertFalse(self.adapter._change_lock.locked())
+
     def test_timeout_holds_guard_for_live_job_glicer_then_late_exit(self):
         self.start()
         self.drain()

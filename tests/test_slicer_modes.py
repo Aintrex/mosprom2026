@@ -379,7 +379,7 @@ class ModeTests(unittest.TestCase):
 
     def test_registry_schema_and_dev_mode(self):
         tools = self.tools.list_tools()
-        self.assertEqual([t["name"] for t in tools], ["assistant_status", "get_setting", "set_setting", "get_slicer_state", "set_print_mode", "list_quality_profiles", "list_materials", "select_profile", "select_material", "load_model", "list_models", "get_model_bounds", "start_slicing", "get_slicing_status", "get_slicing_result", "export_gcode", "save_project_3mf", "get_export_status", "describe_settings", "get_model_state", "move_model", "rotate_model", "scale_model", "delete_model", "arrange_models", "get_arrangement_status", "load_model_file", "list_custom_profiles", "create_custom_profile", "select_custom_profile", "save_custom_profile", "wait_for_slicing", "wait_for_export"])
+        self.assertEqual([t["name"] for t in tools], ["assistant_status", "get_setting", "set_setting", "get_slicer_state", "set_print_mode", "list_quality_profiles", "list_materials", "select_profile", "select_material", "load_model", "list_models", "get_model_bounds", "start_slicing", "get_slicing_status", "get_slicing_result", "export_gcode", "save_project_3mf", "get_export_status", "describe_settings", "get_model_state", "move_model", "rotate_model", "scale_model", "delete_model", "arrange_models", "get_arrangement_status", "load_model_file", "list_custom_profiles", "create_custom_profile", "select_custom_profile", "save_custom_profile", "wait_for_slicing", "wait_for_export", "center_model"])
         self.assertEqual(tools[4]["inputSchema"], {"type": "object", "properties": {
             "mode": {"type": "string", "enum": ["classic", "cylindrical", "cylindrical_full"]}},
             "required": ["mode"], "additionalProperties": False})
