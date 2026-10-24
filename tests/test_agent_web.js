@@ -657,6 +657,27 @@ async function main() {
   sceneApp.elements["btn-scene-refresh"].emit("click"); await settle();
   assert.match(sceneApp.elements["scene-status"].textContent, /больше не существует/, "A vanished ID is dropped, never reused");
   assert(sceneApp.elements["btn-rotate"].disabled);
-  console.log("Agent web contract: 31 scenarios OK (22 preserved + 8 saved-dialog + scene controls; offline DOM).");
+  const admissionSnapshot = Object.assign(idle(), {messages: [{message_id: "numeric-notice", role: "assistant", event_id: 2,
+    text: "Для value выполнен явный разбор числовой строки на границе LLM. Причина строкового типа не установлена; это не подтверждение записи."}],
+    tool_events: [{id: 1, type: "tool_finished", data: {name: "set_setting", tool_call_id: "parsed", result: {ok: true,
+      data: {key: "layer_height", before: 0.1, after: 0.12, unit: "mm"},
+      argument_admission: {field: "value", from_type: "string", to_type: "number", reason: "strict_json_number_literal", stage: "llm_boundary"}}}}], last_event_id: 2});
+  const admissionApp = harness(path => ({code: 200, body: path === "/api/status" ? status : admissionSnapshot}));
+  await settle();
+  assert.match(visibleText(admissionApp.elements.messages), /явный разбор числовой строки/);
+  assert.match(visibleText(admissionApp.elements.messages), /Причина строкового типа не установлена/);
+  assert.match(nodes(admissionApp.elements.messages, "details")[0].textContent, /strict_json_number_literal/);
+  assert(!admissionApp.requests.some(r => r.options && r.options.method === "POST" && !readOnlyRpc(r)));
+  const stagedSnapshot = toolSnapshot([
+    {name: "rotate_model", result: {ok: false, error: {code: "model_transform_unsupported", message: "Выключите Automatic drop down в UI", stage: "preflight", operation_started: false}}},
+    {name: "rotate_model", result: {ok: false, error: {code: "model_transform_not_applied", message: "Матрица не подтверждена", stage: "execution", operation_started: true}}}
+  ]);
+  const stagedApp = harness(path => ({code: 200, body: path === "/api/status" ? status : stagedSnapshot}));
+  await settle();
+  assert.match(visibleText(stagedApp.elements.messages.children[0]), /отклонено до изменения модели/);
+  assert.match(visibleText(stagedApp.elements.messages.children[0]), /защиты не отключаются автоматически/);
+  assert.match(visibleText(stagedApp.elements.messages.children[1]), /Вызов штатной операции уже начат/);
+  assert.equal(nodes(stagedApp.elements.messages, "button").length, 0);
+  console.log("Agent web contract: 33 scenarios OK (30 preserved + numeric admission/transform stages + scene controls; offline DOM).");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

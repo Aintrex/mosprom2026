@@ -269,7 +269,7 @@ class AgentTests(unittest.TestCase):
         schemas = self.llm.requests[0][2]
         expected = [t for t in self.tools.list_tools() if t["name"] not in ("assistant_status", "load_model")]
         self.assertEqual({t["function"]["name"]: t["function"]["parameters"] for t in schemas},
-                         {t["name"]: t["inputSchema"] for t in expected})
+                         {t["name"]: {k: v for k, v in t["inputSchema"].items() if k != "oneOf"} for t in expected})
         self.assertEqual([m["role"] for m in self.llm.requests[1][1]], ["system", "user", "assistant", "tool", "tool"])
         self.assertEqual(self.snapshot()["agent_state"], "idle")
         self.assertEqual(len(self.snapshot()["messages"]), 2)

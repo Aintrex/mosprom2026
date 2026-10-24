@@ -7,7 +7,7 @@
 | Проблема | Причина | Исправление |
 | --- | --- | --- |
 | Поворот модели «не получается» | `transforms.py` и `arrangement.py` отклоняли любые операции, если `physics/automatic_drop_down` не `False`. В STE (`steslicer/PlatformPhysics.py`) этот preference по умолчанию `True`, поэтому move/rotate/scale/delete/arrange всегда отказывали | Запрет оставлен только для `automatic_push_free` (по умолчанию выключен, двигает соседей). Drop down допускается: операция подтверждается чтением сразу (физика срабатывает таймером 100 мс позже), результат несёт предупреждение. Preferences не меняются |
-| `layer_height` приходит строкой `"0.12"` | Схема `value` — union number/boolean/string; модель провайдера отправляет строку. Транспорт (`json.loads`) тип не меняет | На границе LLM `ToolRegistry.coerce_llm_arguments` переводит только простой десятичный литерал (без единиц, выражений, inf/nan, hex) в число для float/int-ключей каталога и угла/координат/факторов, `"true"/"false"` для bool, удаляет `extruder_id: null` при `scope=global`. Каждое преобразование возвращается в `argument_coercions` и показывается в карточке. Прямой MCP остаётся строгим (`-32602`) |
+| `layer_height` приходит строкой `"0.12"` | Схема `value` — union number/boolean/string; модель провайдера отправляет строку | После слияния с main: числовые строки `set_setting` разбирает `ToolRegistry.llm_arguments` сокомандника (2aea9b5). `coerce_llm_arguments` оставлен для `"true"/"false"` bool-настроек, `extruder_id: null` при global и `offset/limit`. Строки в преобразованиях не чинятся. Верхнеуровневый `oneOf` убран только из схем для LLM |
 | Агент не доводит «нарезка → G-code» | Промпт запрещал цепочку, опрос статуса тратил шаги LLM, бюджет 8/16/120 с | Инструменты только для чтения `wait_for_slicing` / `wait_for_export` (опрос раз в секунду в worker, до 120 с, обрезается остатком бюджета хода). Бюджет 20 LLM / 40 tools / 300 с, сетевой вызов до 60 с. Промпт описывает сценарий подготовки и выбор 3D/5D |
 | Крупный STL «не загружается» | Ожидание импорта 10 с | 60 с |
 | Тяжёлые запросы к LLM | Фото из всех прошлых ходов (до 12) пересылались base64 на каждом шаге | Фото передаются для текущего и предыдущего хода; старые заменяются текстовой пометкой |
@@ -23,7 +23,8 @@
 
 ## Проверки
 
-- `python -m unittest discover -s tests`: 375 OK (новые: `test_llm_boundary.py`, инвалидация прямого MCP, drop down с поворотом, пересылка фото, строгий MCP для строки).
+- После слияния с main (2aea9b5): `python -m unittest discover -s tests` — 390 OK, `node tests/test_agent_web.js` — 33 OK. Его тест физики обновлён: drop down разрешён, push free блокирует.
+- До слияния: `python -m unittest discover -s tests`: 375 OK (новые: `test_llm_boundary.py`, инвалидация прямого MCP, drop down с поворотом, пересылка фото, строгий MCP для строки).
 - `node tests/test_agent_web.js`: 31 сценарий OK (прежние 30 + контролы сцены).
 - Python 3.5: существующий тест `ast.parse(feature_version=(3, 5))` по всем модулям плагина проходит. Запуск под настоящим Python 3.5 не выполнялся.
 

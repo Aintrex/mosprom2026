@@ -23,17 +23,15 @@ class FakeAdapter(object):
 class CoercionTests(unittest.TestCase):
     coerce = staticmethod(ToolRegistry.coerce_llm_arguments)
 
-    def test_transform_numbers_and_axis(self):
-        args, notes = self.coerce("rotate_model", {"object_id": "m", "axis": " X", "angle_degrees": "90"})
-        self.assertEqual(args, {"object_id": "m", "axis": "x", "angle_degrees": 90.0})
-        self.assertEqual(len(notes), 1)
-        args, notes = self.coerce("move_model", {"object_id": "m", "position_mm": {"x": "1.5", "y": 0, "z": "-2"}})
-        self.assertEqual(args["position_mm"], {"x": 1.5, "y": 0, "z": -2.0})
-        self.assertEqual(len(notes), 2)
+    def test_transform_numbers_left_for_strict_rejection(self):
+        args = {"object_id": "m", "axis": "x", "angle_degrees": "90"}
+        self.assertEqual(self.coerce("rotate_model", args), (args, []))
 
     def test_typed_settings_only(self):
-        self.assertEqual(self.coerce("set_setting", {"key": "wall_line_count", "scope": "global", "value": "3"})[0]["value"], 3)
-        self.assertEqual(self.coerce("set_setting", {"key": "wall_line_count", "scope": "global", "value": "3.5"})[0]["value"], "3.5")
+        # int/float strings are left to ToolRegistry.llm_arguments (strict numeric path).
+        self.assertEqual(self.coerce("set_setting", {"key": "wall_line_count", "scope": "global", "value": "3"})[0]["value"], "3")
+        self.assertEqual(ToolRegistry.llm_arguments("set_setting", {"key": "wall_line_count", "scope": "global", "value": "3"})[0]["value"], 3)
+        self.assertEqual(self.coerce("describe_settings", {"scope": "global", "limit": "10"})[0]["limit"], 10)
         self.assertIs(self.coerce("set_setting", {"key": "support_enable", "scope": "global", "value": "False"})[0]["value"], False)
         # enum strings and unknown keys are never touched
         self.assertEqual(self.coerce("set_setting", {"key": "adhesion_type", "scope": "global", "value": "1"})[0]["value"], "1")
