@@ -19,7 +19,7 @@ import test_slicer_slicing as slicing_tests
 import test_print_settings as print_tests
 from AIAssistant.agent.config import PreferencesConfigStore, validate_config
 from AIAssistant.agent.llm import ChatCompletionsClient, LLMError, sanitize_secret
-from AIAssistant.agent.service import AgentService, APIError
+from AIAssistant.agent.service import AgentService, APIError, MAX_LLM_STEPS, MAX_TOOL_CALLS, TOTAL_BUDGET_SECONDS
 from AIAssistant.server import create_server
 from AIAssistant.slicer.qt_bridge import QtBridge, SlicerError
 
@@ -172,7 +172,7 @@ class ClientTests(unittest.TestCase):
         req, kwargs = captured[0]
         self.assertEqual(req.full_url, CONFIG["base_url"] + "/chat/completions")
         self.assertEqual(req.get_header("Authorization"), "Bearer " + CONFIG["api_key"])
-        self.assertEqual(kwargs["timeout"], 30)
+        self.assertEqual(kwargs["timeout"], 60)
         self.assertEqual(kwargs["context"].verify_mode, ssl.CERT_REQUIRED)
         self.assertTrue(kwargs["context"].check_hostname)
         payload = json.loads(req.data.decode("utf-8"))
@@ -269,7 +269,7 @@ class AgentTests(unittest.TestCase):
         schemas = self.llm.requests[0][2]
         expected = [t for t in self.tools.list_tools() if t["name"] not in ("assistant_status", "load_model")]
         self.assertEqual({t["function"]["name"]: t["function"]["parameters"] for t in schemas},
-                         {t["name"]: t["inputSchema"] for t in expected})
+                         {t["name"]: {k: v for k, v in t["inputSchema"].items() if k != "oneOf"} for t in expected})
         self.assertEqual([m["role"] for m in self.llm.requests[1][1]], ["system", "user", "assistant", "tool", "tool"])
         self.assertEqual(self.snapshot()["agent_state"], "idle")
         self.assertEqual(len(self.snapshot()["messages"]), 2)
@@ -377,20 +377,37 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.agent._sessions[self.sid], prior)
         self.assertTrue(self.llm.closed)
 
+    def test_direct_mcp_write_invalidates_slice_and_respects_busy_agent(self):
+        self.service()
+        session = self.agent._sessions[self.sid]
+        session["slice"] = {"slice_id": "s1", "state": "completed", "progress": 1.0, "result": {"x": 1}, "valid": True, "error": None}
+        direct = self.agent.mcp_tools
+        with self.assertRaises(ValueError):
+            direct.call("set_setting", {"key": "layer_height", "scope": "global", "value": "0.12"})  # MCP stays strict
+        self.agent._active_turn = "other-turn"
+        self.assertEqual(direct.call("set_setting", {"key": "layer_height", "scope": "global", "value": 0.12})["error"]["code"], "agent_busy")
+        self.assertEqual(self.app.stack.writes, [])
+        self.agent._active_turn = None
+        self.assertTrue(direct.call("set_setting", {"key": "layer_height", "scope": "global", "value": 0.12})["ok"])
+        self.assertEqual(self.app.stack.writes, [("layer_height", 0.12)])
+        self.assertFalse(session["slice"]["valid"])
+        self.assertIn("s1", session["_invalidated"])
+        self.assertFalse(self.agent._write_pending)
+
     def test_step_tool_and_remaining_time_budgets(self):
-        self.service(*[calls(tool("list_models", call_id="c" + str(i))) for i in range(8)])
+        self.service(*[calls(tool("list_models", call_id="c" + str(i))) for i in range(MAX_LLM_STEPS)])
         self.send("Диагностика")
-        self.assertEqual(len(self.llm.requests), 8)
+        self.assertEqual(len(self.llm.requests), MAX_LLM_STEPS)
         self.assertEqual(self.agent.get_events(self.sid)["events"][-3]["data"]["code"], "step_limit")
-        self.service(calls(*[tool("list_models", call_id="c" + str(i)) for i in range(16)]),
-                     calls(tool("start_slicing", call_id="c17")))
+        self.service(calls(*[tool("list_models", call_id="c" + str(i)) for i in range(MAX_TOOL_CALLS)]),
+                     calls(tool("start_slicing", call_id="last")))
         self.send("Диагностика")
-        self.assertEqual(len(self.results()), 17)
+        self.assertEqual(len(self.results()), MAX_TOOL_CALLS + 1)
         self.assertEqual(self.results()[-1]["error"]["code"], "tool_limit")
         self.assertEqual(self.app.backend.calls, 0)
         now = [0.0]
         def spend(client, messages):
-            now[0] = 119.8
+            now[0] = TOTAL_BUDGET_SECONDS - 0.2
             return calls(tool("set_setting", {"key": "layer_height", "scope": "global", "value": 0.24}))
         self.service(spend)
         self.agent.clock = lambda: now[0]
@@ -399,7 +416,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.app.stack.writes, [])
         now[0] = 0
         def spend_request(client, messages):
-            now[0] = 119.9
+            now[0] = TOTAL_BUDGET_SECONDS - 0.1
             return calls(tool("invented"))
         self.service(spend_request, {"content": "ok"})
         self.agent.clock = lambda: now[0]
@@ -408,7 +425,7 @@ class AgentTests(unittest.TestCase):
 
     def test_bad_message_empty_duplicate_ids_and_oversize_batch_release_busy(self):
         for answer in ({}, {"role": "user", "content": "oops"}, calls(tool("list_models"), tool("list_models")),
-                       calls(*[tool("start_slicing", call_id=str(i)) for i in range(17)])):
+                       calls(*[tool("start_slicing", call_id=str(i)) for i in range(MAX_TOOL_CALLS + 1)])):
             self.service(answer)
             self.send()
             self.assertEqual(self.snapshot()["agent_state"], "idle")
@@ -575,7 +592,7 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(self.request("/api/events?session_id=x&session_id=y")[0], 400)
 
     def test_legacy_and_mcp_notification_do_not_call_agent_or_mutate(self):
-        self.assertEqual(self.request("/api/health")[1], {"status": "ok", "mode": "scaffold"})
+        self.assertEqual(self.request("/api/health")[1], {"status": "ok", "mode": "plugin"})
         self.assertEqual(self.request("/api/message", {"text": "hello"})[1]["mode"], "scaffold")
         request = {"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "start_slicing", "arguments": {}}}
         with mock.patch.object(self.agent.tools, "call", side_effect=AssertionError("No notification execution")):

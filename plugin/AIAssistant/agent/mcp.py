@@ -9,7 +9,7 @@ def error(request_id, code, message):
 
 
 def dispatch(request, tools):
-    """Minimal JSON-RPC scaffold, not a complete MCP transport implementation."""
+    """Minimal MCP JSON-RPC: initialize, tools/list, tools/call (no resources/prompts)."""
     if not isinstance(request, dict):
         return error(None, -32600, "Invalid Request")
     request_id = request.get("id")
@@ -25,7 +25,7 @@ def dispatch(request, tools):
         result = {
             "protocolVersion": "2024-11-05",
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "steslicer-ai-scaffold", "version": "0.1.0"}
+            "serverInfo": {"name": "steslicer-ai-assistant", "version": "1.0.0"}
         }
     elif method == "tools/list":
         result = {"tools": tools.list_tools()}

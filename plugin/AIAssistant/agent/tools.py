@@ -1,7 +1,9 @@
 import copy
 import decimal
+import math
 import re
 import sys
+import time
 
 from ..slicer.adapter import SlicerAdapter, validate_setting_arguments
 from ..slicer.modes import PRINT_MODES, validate_mode_arguments
@@ -18,6 +20,28 @@ from ..slicer.custom_profiles import CUSTOM_FIELDS, validate_custom_arguments
 
 class UnknownToolError(Exception):
     pass
+
+
+# Read-only waits: poll the native status from the agent worker (never on Qt).
+WAIT_TOOLS = {"wait_for_slicing": ("slice_id", "get_slicing_status"),
+              "wait_for_export": ("export_id", "get_export_status")}
+MAX_WAIT_SECONDS, WAIT_POLL_SECONDS = 120, 1.0
+
+
+# Plain decimal only: no units, expressions, hex, inf/nan or thousands separators.
+DECIMAL = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d{1,3})?$")
+
+
+def _decimal(value, integer=False):
+    """Return a finite number for a strict decimal string, else None."""
+    if not isinstance(value, str) or not DECIMAL.match(value.strip()):
+        return None
+    number = float(value.strip())
+    if not math.isfinite(number):
+        return None
+    if integer:
+        return int(number) if number == int(number) else None
+    return number
 
 
 class ToolRegistry(object):
@@ -107,10 +131,10 @@ class ToolRegistry(object):
                                 "required": ["scope"], "additionalProperties": False}})
 
         descriptions = {"get_model_state": "Мировые origin/матрица 4x4/габариты и outside верхней модели, Uranium Y-up, мм.",
-                        "move_model": "Штатный Undo-перенос origin верхней модели в абсолютную мировую позицию в мм (Y вверх). Требует отключённой физики сцены.",
-                        "rotate_model": "Штатный относительный поворот верхней модели вокруг мировой оси через её origin, градусы; без физики сцены.",
-                        "scale_model": "Штатное умножение мировых осей масштаба на факторы 0.01–100 с сохранением origin; без физики сцены.",
-                        "delete_model": "Штатное удаление одной верхней модели/группы по ID с Undo; исходный файл не удаляется. Без физики сцены."}
+                        "move_model": "Штатный Undo-перенос origin верхней модели в абсолютную мировую позицию в мм. Мир Uranium: y — вертикаль (печатная Z), x/z — плоскость стола, центр стола x=0,z=0. При включённом drop down STE сам опустит модель на стол.",
+                        "rotate_model": "Штатный относительный поворот верхней модели вокруг мировой оси через её origin, angle_degrees — JSON-число градусов. axis=y — вокруг вертикали (поворот в плоскости стола); x/z — положить модель на бок.",
+                        "scale_model": "Штатное умножение мировых осей масштаба на факторы 0.01–100 (1 — без изменений) с сохранением origin; y — вертикаль.",
+                        "delete_model": "Штатное удаление одной верхней модели/группы по ID с Undo; исходный файл не удаляется."}
         for name in ("get_model_state", "move_model", "rotate_model", "scale_model", "delete_model"):
             properties = {"object_id": {"type": "string", "minLength": 1}}
             if name in ("move_model", "scale_model"):
@@ -125,7 +149,7 @@ class ToolRegistry(object):
             self._tools.append({"name": name, "description": descriptions[name], "inputSchema": {
                 "type": "object", "properties": properties, "required": list(TRANSFORM_FIELDS[name]), "additionalProperties": False}})
 
-        for name, description in (("arrange_models", "Запустить native ArrangeObjectsJob classic для всей активной платформы; завершение/all_fit читать по ID. Требует отключённых auto-slice и физики."),
+        for name, description in (("arrange_models", "Запустить native ArrangeObjectsJob classic для всей активной платформы; завершение/all_fit читать по ID. Только classic; требует отключённых auto-slice и push free."),
                                   ("get_arrangement_status", "Состояние своего native job, реальные after и штатные границы all_fit; не проверка всех коллизий.")):
             fields = ARRANGEMENT_FIELDS[name]
             self._tools.append({"name": name, "description": description, "inputSchema": {
@@ -147,6 +171,51 @@ class ToolRegistry(object):
                 "type": "object", "properties": {f: {"type": "string", "minLength": 1,
                     "maxLength": 80 if f == "name" else 256} for f in fields},
                 "required": list(fields), "additionalProperties": False}})
+
+        for name, description in (("wait_for_slicing", "Подождать завершения своей нарезки по slice_id (опрос статуса раз в секунду, до max_seconds). Только чтение; возвращает последний статус. Используй после start_slicing, если пользователь просил G-code/проект."),
+                                  ("wait_for_export", "Подождать завершения записи G-code/3MF по export_id (до max_seconds). Только чтение; возвращает последний статус с artifact.")):
+            field = WAIT_TOOLS[name][0]
+            self._tools.append({"name": name, "description": description, "inputSchema": {
+                "type": "object", "properties": {field: {"type": "string", "minLength": 1},
+                                                 "max_seconds": {"type": "integer", "minimum": 1, "maximum": MAX_WAIT_SECONDS}},
+                "required": [field], "additionalProperties": False}})
+
+    @staticmethod
+    def coerce_llm_arguments(name, arguments):
+        """LLM-boundary repair for describe paging, bool settings and a global null extruder_id.
+
+        Only strict integer/boolean literals are converted and reported back. Numeric
+        set_setting values go through llm_arguments; transform numbers are deliberately
+        not repaired (rejected before API). Direct MCP stays strict.
+        """
+        if not isinstance(arguments, dict):
+            return arguments, []
+        args, notes = copy.deepcopy(arguments), []
+
+        def fix(container, field, kind, label):
+            value = container.get(field)
+            if not isinstance(value, str):
+                return
+            if kind == "bool":
+                fixed = {"true": True, "false": False}.get(value.strip().lower())
+            else:
+                fixed = _decimal(value, integer=(kind == "int"))
+            if fixed is not None:
+                container[field] = fixed
+                notes.append("%s: строка преобразована в %s" % (label, "boolean" if kind == "bool" else "число"))
+
+        if name in ("get_setting", "set_setting", "describe_settings") and args.get("scope") == "global" \
+                and "extruder_id" in args and args["extruder_id"] is None:
+            del args["extruder_id"]
+            notes.append("extruder_id=null удалён для scope=global")
+        key = args.get("key")
+        if name == "set_setting" and isinstance(key, str) and SETTING_TYPES.get(key) == "bool":
+            # float/int strings are handled by the stricter llm_arguments below.
+            fix(args, "value", "bool", "value")
+        elif name == "describe_settings":
+            for field in ("offset", "limit"):
+                fix(args, field, "int", field)
+        return args, notes
 
     def list_tools(self):
         return copy.deepcopy(self._tools)
@@ -246,6 +315,13 @@ class ToolRegistry(object):
         if name in ("assistant_status", "get_slicer_state"):
             if not isinstance(arguments, dict) or arguments:
                 raise ValueError("%s takes no arguments" % name)
+        elif name in WAIT_TOOLS:
+            field = WAIT_TOOLS[name][0]
+            seconds = arguments.get("max_seconds", 60) if isinstance(arguments, dict) else None
+            if (not isinstance(arguments, dict) or field not in arguments or set(arguments) - {field, "max_seconds"} or
+                    not isinstance(arguments[field], str) or not arguments[field] or
+                    isinstance(seconds, bool) or not isinstance(seconds, int) or not 1 <= seconds <= MAX_WAIT_SECONDS):
+                raise ValueError("Нужны %s (строка) и необязательный max_seconds 1–%d" % (field, MAX_WAIT_SECONDS))
         elif name in CUSTOM_FIELDS:
             validate_custom_arguments(name, arguments)
         elif name == "load_model_file":
@@ -273,6 +349,22 @@ class ToolRegistry(object):
         else:
             raise UnknownToolError(name)
 
+    def _wait(self, name, arguments, clock=time.monotonic, sleep=time.sleep):
+        field, reader = WAIT_TOOLS[name]
+        started = clock()
+        deadline = started + arguments.get("max_seconds", 60)
+        while True:
+            result = getattr(self._adapter, reader)(arguments[field])
+            data = result.get("data", {}) if isinstance(result, dict) else {}
+            if not result.get("ok") or data.get("state") in ("completed", "failed") or clock() >= deadline:
+                break
+            sleep(min(WAIT_POLL_SECONDS, max(0, deadline - clock())))
+        result = copy.deepcopy(result)
+        if result.get("ok"):
+            result["data"]["waited_seconds"] = round(clock() - started, 1)
+            result["data"]["wait_finished"] = data.get("state") in ("completed", "failed")
+        return result
+
     @staticmethod
     def is_mutating(name):
         return name in ("set_setting", "set_print_mode", "select_profile", "select_material", "load_model", "load_model_file",
@@ -281,6 +373,8 @@ class ToolRegistry(object):
 
     def call(self, name, arguments):
         self.validate(name, arguments)
+        if name in WAIT_TOOLS:
+            return self._wait(name, arguments)
         if name == "load_model_file":
             if self._file_store is None:
                 return {"ok": False, "error": {"code": "file_not_found", "message": "Хранилище вложений не подключено"}}
@@ -296,7 +390,7 @@ class ToolRegistry(object):
                 result["data"]["file_name"] = lease.metadata["name"]
             return result
         if name == "assistant_status":
-            return {"mode": "scaffold", "llm_connected": False,
+            return {"mode": "plugin", "llm_connected": None,
                     "slicer_tools_implemented": [tool["name"] for tool in self._tools if tool["name"] != "assistant_status"],
                     "slicer_settings_scope": {"keys": list(SETTING_KEYS), "scopes": ["global", "extruder"]},
                     "runtime_verified": False}

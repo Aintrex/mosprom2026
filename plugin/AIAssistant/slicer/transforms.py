@@ -181,8 +181,11 @@ class ModelTransforms(object):
             from UM.Operations.RemoveSceneNodeOperation import RemoveSceneNodeOperation
             operation = RemoveSceneNodeOperation(node)
         prefs = app.getPreferences()
-        if any(prefs.getValue(key) is not False for key in ("physics/automatic_drop_down", "physics/automatic_push_free")):
-            raise SlicerError("model_transform_unsupported", "Выключите Automatic drop down и push free в UI: физика может позже изменить origin или соседние модели. Preferences не изменены")
+        # push_free (default off) may move neighbours later; drop_down (default on in STE)
+        # only re-seats this model on the bed after the confirmed operation, as in the UI.
+        if prefs.getValue("physics/automatic_push_free") is not False:
+            raise SlicerError("model_transform_unsupported", "Выключите «Автоматически раздвигать модели» (push free) в настройках STE: физика может сдвинуть соседние модели. Preferences не изменены")
+        drop_down = prefs.getValue("physics/automatic_drop_down") is not False
         if name != "delete_model":
             self._check_expected(before, expected)
         others = [(n, matrix(n)) for n in self.registry.nodes(app) if n is not node]
@@ -212,6 +215,8 @@ class ModelTransforms(object):
                 after["build_plate"] != before["build_plate"]):
             raise SlicerError("model_transform_not_applied", "Фактическое преобразование отличается от запроса. Перечитайте get_model_state/UI; автоповтора/отката нет")
         warnings = []
+        if drop_down:
+            warnings.append("Включено автоматическое опускание на стол: после операции STE может сдвинуть модель по мировой Y (вертикаль), чтобы она стояла на столе")
         if after["outside_build_area"] is True:
             warnings.append("Модель вне разрешённой области; положение не означает готовность к печати")
         elif after["outside_build_area"] is None:

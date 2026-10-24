@@ -13,6 +13,11 @@
   var historyEntries = [], historyChoice = null, archiveReady = true, switching = false, operationBusy = false;
   var processId = null, bootAttempted = false;
   var partialHistory = false, expiredPending = false;
+  // Defaults mirror API_CONTRACT; /api/status replaces them with server limits.
+  var limits = {files: 5, image: 5 * 1024 * 1024, model: 50 * 1024 * 1024, imagesTotal: 10 * 1024 * 1024,
+    extensions: [".3mf", ".jpeg", ".jpg", ".obj", ".png", ".stl"]};
+  var imported = Object.create(null), attachmentNotes = Object.create(null), rpcId = 0;
+  var sceneModels = [], sceneChoice = null, sceneState = null, sceneBusy = false, sceneRead = false;
 
   function read(key) {
     try { return localStorage.getItem(key); } catch (err) { return null; }
@@ -50,6 +55,7 @@
     elOpen.disabled = busy || !!pending || uploading || !historyChoice;
     elDelete.disabled = elOpen.disabled;
     for (var index = 0; index < elHistory.children.length; index++) elHistory.children[index].disabled = busy || !!pending || uploading;
+    sceneButtons();
   }
   function renderPersistence(value, partial) {
     if (!value) return;
@@ -90,7 +96,7 @@
     var current = ++generation;
     return api("/api/sessions/" + encodeURIComponent(id)).then(function (snapshot) {
       if (current !== generation) return;
-      sessionId = id; selected = []; elInput.value = "";
+      sessionId = id; dropSelected(); elInput.value = "";
       save("ste_ai_session_id", sessionId); adopt(snapshot); historyRows();
       if (elInput.focus) elInput.focus();
     }).then(function () { switching = false; buttons(); }, function (err) { switching = false; buttons(); throw err; });
@@ -109,17 +115,49 @@
       return loadSessions();
     }).catch(function (err) { elHistoryStatus.textContent = err.message; }).then(function () { switching = false; buttons(); });
   }
+  function sizeText(bytes) {
+    if (!number(bytes) || bytes < 0) return "размер не сообщён";
+    if (bytes < 1024) return bytes + " Б";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1).replace(".", ",") + " КБ";
+    return (bytes / 1024 / 1024).toFixed(1).replace(".", ",") + " МБ";
+  }
+  function extensionOf(name) { var match = /\.[^.\\/]+$/.exec(String(name || "")); return match ? match[0].toLowerCase() : ""; }
+  function kindOf(name) { return /^\.(jpg|jpeg|png)$/.test(extensionOf(name)) ? "image" : "model"; }
+  function formatText(item) {
+    var ext = extensionOf(item.name).slice(1).toUpperCase() || "?";
+    return (item.kind || kindOf(item.name)) === "image" ? "Фото " + ext : "3D-модель " + ext;
+  }
+  function revokePreview(item) {
+    if (item && item.preview) { try { URL.revokeObjectURL(item.preview); } catch (err) { /* already released */ } delete item.preview; }
+  }
+  function dropSelected() { selected.forEach(revokePreview); selected = []; }
+  function attachmentPhase(item) {
+    if (item.error) return "Ошибка: " + item.error + " Уберите файл, чтобы отправить сообщение.";
+    if (pending) return item.file_id ? "Отправляется вместе с сообщением…" : "Отправляется…";
+    if (!item.file_id) return "Загружается…";
+    return item.kind === "image" ? "Готово: прикреплено к сообщению (агент увидит фото)." :
+      "Готово: прикреплено к сообщению. В сцену ещё не импортировано — агент импортирует по запросу.";
+  }
   function attachmentList() {
     while (elAttachments.firstChild) elAttachments.removeChild(elAttachments.firstChild);
     var entries = pending ? (pending.attachments || (pending.attachment_ids || []).map(function (id) { return {name: id}; })) : selected;
     entries.forEach(function (item) {
-      var row = document.createElement("div");
-      row.textContent = item.name + (item.error ? " — " + item.error : item.file_id || pending ? " — загружен" : " — загрузка...");
+      var row = element("div", undefined, "attachment-row" + (item.error ? " bad" : item.file_id ? " ready" : ""));
+      if (item.preview) {
+        var img = element("img", undefined, "thumb"); img.src = item.preview; img.alt = ""; row.appendChild(img);
+      }
+      var info = element("div", undefined, "attachment-info");
+      info.appendChild(element("strong", item.name));
+      info.appendChild(element("span", formatText(item) + (number(item.size_bytes) ? " · " + sizeText(item.size_bytes) : ""), "hint"));
+      info.appendChild(element("span", attachmentPhase(item), "phase"));
+      row.appendChild(info);
       if (!pending) {
-        var remove = document.createElement("button");
-        remove.type = "button"; remove.textContent = "Убрать"; remove.disabled = uploading;
+        var remove = element("button", "Убрать", "btn small");
+        remove.type = "button"; remove.disabled = uploading && !item.error && !item.file_id;
+        remove.title = "Убрать из этого сообщения; файл на диске не удаляется";
         remove.addEventListener("click", function () {
-          if (uploading || pending) return;
+          if (pending || (uploading && !item.error && !item.file_id)) return;
+          revokePreview(item);
           selected = selected.filter(function (entry) { return entry !== item; });
           attachmentList(); buttons();
         });
@@ -128,29 +166,47 @@
       elAttachments.appendChild(row);
     });
   }
+  function rejectFile(file, kind) {
+    var ext = extensionOf(file.name);
+    if (limits.extensions.indexOf(ext) < 0) return "формат " + (ext || "без расширения") + " не поддерживается (нужны " + limits.extensions.join(", ") + ").";
+    var maximum = kind === "image" ? limits.image : limits.model;
+    if (file.size > maximum) return "файл " + sizeText(file.size) + " больше лимита " + sizeText(maximum) + ".";
+    if (!file.size) return "файл пустой.";
+    return null;
+  }
   function chooseFiles() {
     if (elFiles.disabled) return;
     var files = Array.prototype.slice.call(elFiles.files || []);
     elFiles.value = "";
-    if (selected.length + files.length > 5) { errorMessage("Допускается до 5 вложений."); return; }
-    var imageBytes = selected.filter(function (item) { return item.kind === "image"; }).reduce(function (sum, item) { return sum + item.size_bytes; }, 0);
+    if (selected.length + files.length > limits.files) { errorMessage("Допускается до " + limits.files + " вложений в одном сообщении."); return; }
+    var imageBytes = selected.filter(function (item) { return item.kind === "image" && !item.error; }).reduce(function (sum, item) { return sum + item.size_bytes; }, 0);
     var items = files.map(function (file) {
-      var image = /\.(jpg|jpeg|png)$/i.test(file.name);
-      imageBytes += image ? file.size : 0;
-      return {name: file.name, size_bytes: file.size, kind: image ? "image" : "model", file: file};
+      var kind = kindOf(file.name), item = {name: file.name, size_bytes: file.size, kind: kind, file: file};
+      item.error = rejectFile(file, kind);
+      if (!item.error && kind === "image") {
+        imageBytes += file.size;
+        if (imageBytes > limits.imagesTotal) item.error = "фото сообщения вместе больше " + sizeText(limits.imagesTotal) + ".";
+      }
+      if (!item.error && kind === "image") {
+        try { item.preview = URL.createObjectURL(file); } catch (err) { item.preview = null; }
+      }
+      if (item.error) delete item.file;
+      return item;
     });
-    if (imageBytes > 10 * 1024 * 1024) { errorMessage("Изображения сообщения превышают 10 MiB."); return; }
     if (!items.length) return;
-    selected = selected.concat(items); uploading = true; attachmentList(); buttons();
+    selected = selected.concat(items);
+    var uploads = items.filter(function (item) { return item.file; });
+    uploading = uploads.length > 0; attachmentList(); buttons();
     var chain = Promise.resolve(), uploadEpoch = processId;
-    items.forEach(function (item) {
+    uploads.forEach(function (item) {
       chain = chain.then(function () {
-        if (uploadEpoch !== processId) { delete item.file; return; }
+        if (uploadEpoch !== processId || selected.indexOf(item) < 0) { delete item.file; return; }
         var form = new FormData(); form.append("file", item.file);
         return api("/api/files", {method: "POST", body: form}).then(function (metadata) {
           delete item.file;
+          // Server ID is authoritative: equal names never share or replace a file_id.
           Object.keys(metadata).forEach(function (key) { item[key] = metadata[key]; });
-        }).catch(function (err) { delete item.file; item.error = err.message; }).then(attachmentList);
+        }).catch(function (err) { delete item.file; item.error = err.message + " Повторная загрузка автоматически не выполняется."; }).then(attachmentList);
       });
     });
     chain.then(function () { uploading = false; attachmentList(); buttons(); });
@@ -248,7 +304,8 @@
     list_quality_profiles: "Профили качества", select_profile: "Выбор профиля", list_materials: "Материалы", select_material: "Выбор материала",
     list_custom_profiles: "Пользовательские профили", create_custom_profile: "Создание профиля", select_custom_profile: "Выбор пользовательского профиля",
     save_custom_profile: "Сохранение профиля", start_slicing: "Запуск нарезки", get_slicing_status: "Состояние нарезки",
-    get_slicing_result: "Результат нарезки", export_gcode: "Экспорт G-code", save_project_3mf: "Сохранение проекта 3MF", get_export_status: "Состояние экспорта"};
+    get_slicing_result: "Результат нарезки", export_gcode: "Экспорт G-code", save_project_3mf: "Сохранение проекта 3MF", get_export_status: "Состояние экспорта",
+    wait_for_slicing: "Ожидание нарезки", wait_for_export: "Ожидание записи файла"};
   function modeText(mode) { return labelFrom({classic: "Классический (3D)", cylindrical: "5D Spiral (цилиндрический)", cylindrical_full: "Полный 5D"}, mode) || valueText(mode); }
   function stateText(state) { return labelFrom({queued: "Принято, ожидает запуска", running: "Выполняется", completed: "Завершено", failed: "Ошибка"}, state) || "Состояние не подтверждено"; }
   function progressText(progress) { return number(progress) && progress >= 0 && progress <= 1 ? "Прогресс: " + Math.round(progress * 100) + "%" : "Прогресс не сообщён"; }
@@ -271,7 +328,7 @@
     error = error || {};
     var code = error.code || "", title = "Не удалось выполнить инструмент", next = "Проверьте результат и состояние в STE Slicer. Не повторяйте изменение автоматически.";
     var networkTimeout = code === "network_timeout" || /[сС]етевой (timeout|бюджет)/.test(error.message || "");
-    if (rejected) { title = "Отклонено до запуска"; next = "API слайсера не вызывался. Проверьте обязательные поля и тип значения; схема находится в технических деталях."; }
+    if (rejected) { title = "Отклонено до запуска"; next = "Настройка/сцена этим вызовом не менялись: API слайсера не вызывался. Ожидаемые поля и типы — в технических деталях."; }
     else if (error.stage === "preflight" && error.operation_started === false) {
       title = "Преобразование отклонено до изменения модели";
       next = "Предварительная проверка не разрешила запуск штатной операции. Проверьте указанную причину и UI; защиты не отключаются автоматически.";
@@ -282,9 +339,14 @@
     }
     else if (networkTimeout) title = "Ответ языковой модели не получен вовремя";
     else if (code === "slice_result_stale" || code === "artifact_stale" || code === "artifact_changed") title = "Результат неактуален";
-    else if (code === "qt_timeout" || code === "execution_error" || code === "tool_result_unconfirmed" || /_timeout$/.test(code)) title = "Исход операции требует проверки";
+    else if (code === "qt_timeout" || code === "execution_error" || code === "tool_result_unconfirmed" || /_timeout$/.test(code) || /_not_applied$/.test(code)) {
+      title = "Исход операции требует проверки"; next = "Результат не подтверждён: сначала перечитайте состояние (список моделей / настройку), не повторяйте действие вслепую.";
+    }
     else if (code === "observation_interrupted") { title = "Наблюдение прервано"; next = "Слайсер мог продолжить работу. Прочитайте статус по ID или проверьте UI, не запускайте операцию повторно."; }
     else if (code === "tool_not_executed") title = "Вызов пропущен";
+    else if (/_unsupported$|_not_found$|^auto_slicing_enabled$|^empty_scene$|^agent_busy$/.test(code)) {
+      title = "Операция не разрешена в текущем состоянии"; next = "Проверка до запуска: STE Slicer не менялся. Устраните причину и повторите вручную.";
+    }
     else if (/_busy$/.test(code) || code === "switch_in_progress") title = "Слайсер занят другой операцией";
     else if (/_failed$/.test(code)) title = "Слайсер сообщил об ошибке";
     var reason = typeof error.message === "string" ? error.message : "Причина не сообщена.";
@@ -309,10 +371,27 @@
     } else if (message.role === "assistant") markdown(div, message.text);
     else div.textContent = message.text;
     if (message.historical) div.appendChild(element("p", "Из сохранённой истории; состояние STE нужно перечитать.", "attachment-name"));
-    (message.attachments || []).forEach(function (item) { div.appendChild(element("p", "Вложение: " + item.name + (item.expired ? " — недоступно, загрузите снова" : ""), "attachment-name")); });
+    (message.attachments || []).forEach(function (item) {
+      var note = element("p", undefined, "attachment-name");
+      if (item.file_id && !item.expired) (attachmentNotes[item.file_id] = attachmentNotes[item.file_id] || []).push({node: note, item: item});
+      attachmentNote(note, item);
+      div.appendChild(note);
+    });
     elMessages.appendChild(div);
   }
+  function attachmentNote(node, item) {
+    var text = "Вложение: " + item.name + " (" + formatText(item) + ")";
+    if (item.expired) text += " — недоступно, загрузите снова (вложения не переживают перезапуск)";
+    else if ((item.kind || kindOf(item.name)) === "model") text += imported[item.file_id] ? " — импортировано в сцену" : " — прикреплено, в сцену не импортировано";
+    node.textContent = text;
+  }
+  function markImported(fileId) {
+    if (typeof fileId !== "string" || imported[fileId]) return;
+    imported[fileId] = true;
+    (attachmentNotes[fileId] || []).forEach(function (entry) { attachmentNote(entry.node, entry.item); });
+  }
   function toolSummary(name, data, args) {
+    name = labelFrom({wait_for_slicing: "get_slicing_status", wait_for_export: "get_export_status"}, name) || name;
     if (!data || typeof data !== "object") return null;
     args = args || {};
     var key = data.key || args.key, label = labelFrom(settingNames, key) || "Настройка", unit = typeof data.unit === "string" ? " " + unitText(data.unit) : " (единица не сообщена)";
@@ -357,13 +436,22 @@
     if (name === "list_custom_profiles" && Array.isArray(data.profiles)) return ["Пользовательских профилей: " + data.profiles.length];
     if (name === "list_quality_profiles" && Array.isArray(data.profiles)) return ["Профилей качества: " + data.profiles.length];
     if (name === "list_materials" && Array.isArray(data.materials)) return ["Материалов: " + data.materials.length];
-    if (/^(move|rotate|scale)_model$/.test(name) && data.object_id && typeof data.changed === "boolean") return [data.changed ? "Преобразование подтверждено." : "Проверено без изменения.", "ID объекта: " + data.object_id,
-      data.after && boundsText(data.after.bounds)];
+    if (/^(move|rotate|scale)_model$/.test(name) && data.object_id && typeof data.changed === "boolean") return transformLines(data);
+    if (name === "delete_model" && data.removed === true) return ["Модель удалена из сцены (исходный файл не тронут). Отмена: Ctrl+Z в STE Slicer."];
     if (name === "get_model_state" && data.object_id && data.position_mm) return ["ID объекта: " + data.object_id,
       "Позиция X / Y / Z: " + ["x", "y", "z"].map(function (axis) { return valueText(data.position_mm[axis]); }).join(" / ") + " мм", boundsText(data.bounds)];
     if ((name === "arrange_models" || name === "get_arrangement_status") && data.arrangement_id && data.state) return ["Расстановка: " + stateText(data.state),
       "ID: " + data.arrangement_id, data.all_fit === false ? "Есть выход за границы стола." : "Полное размещение не подтверждено."];
     return null;
+  }
+  function positionText(position) {
+    return position ? ["x", "y", "z"].map(function (axis) { return valueText(position[axis]); }).join(" / ") + " мм" : "не сообщена";
+  }
+  function transformLines(data) {
+    var before = data.before || {}, after = data.after || {};
+    return [data.changed ? "Преобразование подтверждено чтением сцены." : "Значение уже было таким; сцена не менялась.",
+      "Позиция X / Y↑ / Z: " + positionText(before.position_mm) + (data.changed ? " → " + positionText(after.position_mm) : ""),
+      after.bounds && boundsText(after.bounds)].concat(Array.isArray(data.warnings) ? data.warnings : []);
   }
   function renderTool(kind, data) {
     var key = (data.turn_id || "") + ":" + data.tool_call_id;
@@ -395,6 +483,13 @@
     } else paragraphs(item.body, finished ? lines || ["Ответ получен, но формат результата не распознан. Подтверждение операции смотрите в технических деталях."] :
       ["Запрос передан инструменту. Результат ещё не получен."]);
     if (failedState) paragraphs(item.body, ["Проверьте сообщения STE Slicer и состояние по ID. Не повторяйте запуск автоматически."]);
+    if (finished && Array.isArray(result.argument_coercions) && result.argument_coercions.length) {
+      paragraphs(item.body, ["Аргументы модели исправлены перед запуском: " + result.argument_coercions.join("; ") + "."]);
+    }
+    if (finished && result.ok === true) {
+      if (data.name === "load_model_file" && result.data) markImported(result.data.file_id);
+      if (/^(load_model_file|load_model|move_model|rotate_model|scale_model|delete_model|get_arrangement_status|set_print_mode)$/.test(data.name)) sceneSoon();
+    }
     technical(item.card, {tool: data.name, arguments: item.started ? item.arguments : "Не опубликованы", result: finished ? result : "Ожидается"});
   }
   function renderSlice(slice) {
@@ -466,7 +561,7 @@
   function adopt(snapshot) {
     processId = snapshot.process_id || processId;
     if (pending && ((pending.process_id && processId && pending.process_id !== processId) || (!pending.process_id && snapshot.restored))) {
-      expiredPending = true; pending = null; selected = []; save("ste_ai_pending", null); elInput.value = "";
+      expiredPending = true; pending = null; dropSelected(); save("ste_ai_pending", null); elInput.value = "";
     }
     while (elMessages.firstChild) elMessages.removeChild(elMessages.firstChild);
     cards = {}; messages = {};
@@ -494,7 +589,7 @@
     renderExport(snapshot.export);
     if (pending && pending.session_id === snapshot.session_id &&
         snapshot.messages.some(function (m) { return m.client_message_id === pending.client_message_id; })) {
-      pending = null; selected = []; save("ste_ai_pending", null); elInput.value = "";
+      pending = null; dropSelected(); save("ste_ai_pending", null); elInput.value = "";
     }
     if (pending) {
       elInput.value = pending.text;
@@ -511,7 +606,7 @@
   function newSession() {
     ++generation;
     return post("/api/sessions", {}).then(function (snapshot) {
-      sessionId = snapshot.session_id; pending = null; selected = []; after = 0;
+      sessionId = snapshot.session_id; pending = null; dropSelected(); after = 0;
       save("ste_ai_session_id", sessionId); save("ste_ai_pending", null); adopt(snapshot);
       elInput.value = ""; historyChoice = sessionId;
       return loadSessions();
@@ -523,8 +618,9 @@
       globalBusy = status.agent_state === "processing";
       operationBusy = !!status.operation_busy;
       processId = status.process_id || processId;
+      readLimits(status);
       if (pending && pending.process_id && processId && pending.process_id !== processId) {
-        expiredPending = true; pending = null; selected = []; save("ste_ai_pending", null);
+        expiredPending = true; pending = null; dropSelected(); save("ste_ai_pending", null);
       }
       document.getElementById("status-badge").textContent = status.llm.configured ?
         "LLM настроена; связь не проверена" : "Нужны настройки LLM";
@@ -533,18 +629,191 @@
       document.getElementById("st-mode").textContent = status.slicer.printing_mode ? modeText(status.slicer.printing_mode) : "—";
       buttons();
       if (restarted && sessionId) {
-        ++generation; selected = [];
+        ++generation; dropSelected();
         return restore(); // New process: replace old cards/capabilities using a read only.
       }
     });
   }
+  function readLimits(status) {
+    var value = status.limits || {};
+    if (number(value.files_per_message)) limits.files = value.files_per_message;
+    if (number(value.image_bytes)) limits.image = value.image_bytes;
+    if (number(value.file_bytes)) limits.model = value.file_bytes;
+    if (number(value.images_per_message_bytes)) limits.imagesTotal = value.images_per_message_bytes;
+    if (Array.isArray(status.accepted_extensions) && status.accepted_extensions.length) limits.extensions = status.accepted_extensions.slice();
+    document.getElementById("attachment-limits").textContent = "Вложения: фото JPG/PNG до " + sizeText(limits.image) +
+      ", модели STL/OBJ/3MF до " + sizeText(limits.model) + "; до " + limits.files + " файлов";
+  }
+
+  // Scene panel: live objects through the same MCP registry (no new REST routes, no JS file access).
+  var elSceneList = document.getElementById("scene-list"), elSceneStatus = document.getElementById("scene-status");
+  var elSceneResult = document.getElementById("scene-result"), elSceneReason = document.getElementById("scene-reason");
+  var sceneControls = ["btn-rotate", "btn-move", "btn-scale", "btn-delete-model"].map(function (id) { return document.getElementById(id); });
+  var sceneTimer = null;
+  function rpc(name, args) {
+    return post("/mcp", {jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: {name: name, arguments: args || {}}}).then(function (body) {
+      if (body.error) {
+        var error = new Error(body.error.message || "Аргументы отклонены");
+        error.rejected = [-32600, -32601, -32602].indexOf(body.error.code) !== -1;
+        throw error;
+      }
+      var content = body.result && body.result.content && body.result.content[0];
+      return JSON.parse(content && content.text || "null") || {ok: false, error: {message: "Пустой ответ инструмента"}};
+    });
+  }
+  function sceneReason() {
+    if (globalBusy || sessionBusy) return "Агент выполняет запрос — ручные изменения сцены временно недоступны.";
+    if (operationBusy) return "Идёт нарезка или запись файла — дождитесь завершения.";
+    if (uploading) return "Идёт загрузка вложения.";
+    if (switching) return "Переключение диалога.";
+    if (sceneBusy) return "Выполняется предыдущее действие со сценой.";
+    if (!sceneChoice) return sceneModels.length ? "Выберите модель в списке." : sceneRead ? "Сцена пуста — действовать не с чем." : "Сцена ещё не прочитана.";
+    return "";
+  }
+  function sceneButtons() {
+    if (!sceneControls) return; // buttons() may run before the scene panel is initialised.
+    var reason = sceneReason();
+    sceneControls.forEach(function (button) { button.disabled = !!reason; });
+    document.getElementById("btn-scene-refresh").disabled = sceneBusy;
+    elSceneReason.textContent = reason;
+  }
+  function sceneSoon() {
+    if (sceneTimer) return;
+    sceneTimer = true;
+    Promise.resolve().then(function () { sceneTimer = null; return refreshScene(); });
+  }
+  function fillPosition() {
+    var position = sceneState && sceneState.position_mm;
+    ["x", "y", "z"].forEach(function (axis) {
+      document.getElementById("move-" + axis).value = position && number(position[axis]) ? String(Math.round(position[axis] * 1000) / 1000) : "";
+    });
+  }
+  function renderScene() {
+    clear(elSceneList);
+    sceneModels.forEach(function (model) {
+      var size = model.bounds && model.bounds.size;
+      var row = element("button", (model.name || "Без имени") + (size ? " · " + ["x", "y", "z"].map(function (axis) {
+        return valueText(Math.round(size[axis] * 10) / 10); }).join(" × ") + " мм" : ""), "history-entry" + (model.object_id === sceneChoice ? " current" : ""));
+      row.type = "button";
+      row.title = "ID " + model.object_id + (model.is_group ? " (группа)" : "");
+      row.setAttribute && row.setAttribute("aria-pressed", model.object_id === sceneChoice ? "true" : "false");
+      row.addEventListener("click", function () {
+        if (sceneChoice === model.object_id) return;
+        sceneChoice = model.object_id; sceneState = null; clear(elSceneResult);
+        renderScene(); refreshScene();
+      });
+      elSceneList.appendChild(row);
+    });
+    document.getElementById("scene-controls").hidden = !sceneModels.length; // Nothing to act on.
+    var chosen = sceneModels.filter(function (model) { return model.object_id === sceneChoice; })[0];
+    var selectedText = document.getElementById("scene-selected");
+    if (!chosen) selectedText.textContent = sceneModels.length ? "Выберите модель в списке." : "Нет модели для действий.";
+    else {
+      selectedText.textContent = "Выбрана: " + (chosen.name || chosen.object_id) + (sceneState ? ". Позиция X / Y↑ / Z: " + positionText(sceneState.position_mm) +
+        (sceneState.outside_build_area === true ? ". Вне области печати!" : "") : "");
+    }
+    sceneButtons();
+  }
+  function refreshScene() {
+    if (sceneBusy) return Promise.resolve();
+    sceneBusy = true; sceneButtons();
+    var previous = sceneChoice;
+    return rpc("list_models").then(function (result) {
+      if (!result.ok) {
+        sceneModels = []; sceneChoice = null; sceneState = null;
+        elSceneStatus.textContent = "Сцена недоступна: " + (result.error && result.error.message || "ошибка чтения");
+        return;
+      }
+      sceneRead = true;
+      sceneModels = Array.isArray(result.data.models) ? result.data.models : [];
+      elSceneStatus.textContent = sceneModels.length ? "Объектов в сцене: " + sceneModels.length + ". Данные прочитаны из STE сейчас." :
+        "Сцена пуста. Прикрепите STL/OBJ/3MF и попросите агента импортировать модель.";
+      if (sceneModels.length === 1 && !sceneChoice) sceneChoice = sceneModels[0].object_id;
+      if (sceneChoice && !sceneModels.some(function (model) { return model.object_id === sceneChoice; })) {
+        sceneChoice = null; sceneState = null;
+        elSceneStatus.textContent += " Выбранный ранее объект больше не существует (удалён, перезапуск или импорт проекта).";
+      }
+      if (!sceneChoice) return;
+      return rpc("get_model_state", {object_id: sceneChoice}).then(function (state) {
+        sceneState = state.ok ? state.data : null;
+        if (sceneChoice !== previous || !document.getElementById("move-x").value) fillPosition();
+      });
+    }).catch(function (err) {
+      elSceneStatus.textContent = "Не удалось прочитать сцену: " + err.message;
+    }).then(function () { sceneBusy = false; renderScene(); });
+  }
+  function parseNumber(id, label, example) {
+    var raw = String(document.getElementById(id).value || "").trim().replace(",", ".");
+    if (!raw) return {error: label + ": поле пустое. Введите число, например " + example + "."};
+    if (!/^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(raw)) return {error: label + ": ожидается число без единиц, например " + example + "."};
+    var value = Number(raw);
+    if (!isFinite(value)) return {error: label + ": число вне допустимого диапазона."};
+    return {value: value};
+  }
+  function sceneOutcome(title, lines, kind) {
+    clear(elSceneResult);
+    elSceneResult.className = "scene-result " + (kind || "");
+    elSceneResult.appendChild(element("strong", title));
+    paragraphs(elSceneResult, lines);
+  }
+  function sceneAction(name, args, label) {
+    var reason = sceneReason();
+    if (reason) { sceneOutcome("Действие недоступно", [reason], "fail"); return; }
+    sceneBusy = true; sceneButtons();
+    sceneOutcome(label + ": выполняется…", ["Ждём подтверждения от STE Slicer."], "neutral");
+    rpc(name, args).then(function (result) {
+      if (result.ok) {
+        var lines = name === "delete_model" ? ["Модель удалена из сцены; исходный файл не удалён. Отмена: Ctrl+Z в STE Slicer."] : transformLines(result.data);
+        sceneOutcome(label + ": готово", lines.concat(["Прежняя нарезка и скачивания помечены устаревшими — нарежьте заново."]), "ok");
+      } else {
+        var info = problem(result.error);
+        sceneOutcome(info.title, ["Действие не выполнено или не подтверждено."].concat(info.lines), "fail");
+        technical(elSceneResult, result.error);
+      }
+    }, function (err) {
+      sceneOutcome(err.rejected ? "Отклонено до запуска" : "Результат действия не подтверждён", [err.message, err.rejected ? "Сцена этим действием не менялась." : "Связь с плагином прервалась; результат не подтверждён — нажмите «Обновить». Не повторяйте действие до проверки сцены."], "fail");
+    }).then(function () { sceneBusy = false; return refreshScene(); });
+  }
+  document.getElementById("btn-scene-refresh").addEventListener("click", function () { refreshScene(); });
+  document.getElementById("btn-rotate").addEventListener("click", function () {
+    var angle = parseNumber("rot-angle", "Угол", "90");
+    if (angle.error) { sceneOutcome("Проверьте ввод", [angle.error, "Сцена не менялась."], "fail"); return; }
+    sceneAction("rotate_model", {object_id: sceneChoice, axis: document.getElementById("rot-axis").value || "x", angle_degrees: angle.value}, "Поворот");
+  });
+  document.getElementById("btn-move").addEventListener("click", function () {
+    var position = {}, errors = [];
+    ["x", "y", "z"].forEach(function (axis) {
+      var parsed = parseNumber("move-" + axis, axis.toUpperCase(), "0");
+      if (parsed.error) errors.push(parsed.error); else position[axis] = parsed.value;
+    });
+    if (errors.length) { sceneOutcome("Проверьте ввод", errors.concat(["Сцена не менялась."]), "fail"); return; }
+    sceneAction("move_model", {object_id: sceneChoice, position_mm: position}, "Перемещение");
+  });
+  document.getElementById("btn-scale").addEventListener("click", function () {
+    var factors = {}, errors = [];
+    ["x", "y", "z"].forEach(function (axis) {
+      var parsed = parseNumber("scale-" + axis, "Масштаб " + axis.toUpperCase(), "1.5");
+      if (parsed.error) errors.push(parsed.error);
+      else if (parsed.value < 0.01 || parsed.value > 100) errors.push("Масштаб " + axis.toUpperCase() + ": допустимо от 0,01 до 100.");
+      else factors[axis] = parsed.value;
+    });
+    if (errors.length) { sceneOutcome("Проверьте ввод", errors.concat(["Сцена не менялась."]), "fail"); return; }
+    sceneAction("scale_model", {object_id: sceneChoice, factors: factors}, "Масштаб");
+  });
+  document.getElementById("btn-delete-model").addEventListener("click", function () {
+    var chosen = sceneModels.filter(function (model) { return model.object_id === sceneChoice; })[0];
+    if (!chosen || typeof confirm !== "function" || !confirm("Удалить «" + (chosen.name || chosen.object_id) +
+        "» из сцены STE? Исходный файл не удаляется; отменить можно Ctrl+Z в STE Slicer.")) return;
+    sceneAction("delete_model", {object_id: sceneChoice}, "Удаление");
+  });
+
   function pollPage(current) {
     return api("/api/events?session_id=" + encodeURIComponent(sessionId) + "&after=" + after).then(function (page) {
       if (current !== generation) return;
       if (page.process_id && processId && page.process_id !== processId) {
         processId = page.process_id;
         if (pending) { expiredPending = true; pending = null; save("ste_ai_pending", null); }
-        selected = [];
+        dropSelected();
         return restore();
       }
       page.events.forEach(function (event) {
@@ -587,7 +856,7 @@
       {text: attempt.text, attachment_ids: attempt.attachment_ids || [], client_message_id: attempt.client_message_id}).then(function () {
         if (pending !== attempt || attempt.session_id !== sessionId || (attempt.process_id && processId && attempt.process_id !== processId)) return;
         // Read the accepted user message; never add a second optimistic copy.
-        pending = null; selected = []; save("ste_ai_pending", null); elInput.value = "";
+        pending = null; dropSelected(); save("ste_ai_pending", null); elInput.value = "";
         return restore();
       }).catch(function (err) {
         if (pending !== attempt || attempt.session_id !== sessionId || (attempt.process_id && processId && attempt.process_id !== processId)) return;
@@ -603,6 +872,9 @@
 
   document.getElementById("chat-form").addEventListener("submit", function (event) { event.preventDefault(); send(elInput.value); });
   elFiles.addEventListener("change", chooseFiles);
+  elInput.addEventListener("keydown", function (event) {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); if (!elSend.disabled) send(elInput.value); }
+  });
   elNew.addEventListener("click", function () { if (!elNew.disabled) newSession().catch(function (err) { errorMessage(err.message); }); });
   elOpen.addEventListener("click", function () { if (!elOpen.disabled) openSession(historyChoice).catch(function (err) { elHistoryStatus.textContent = err.message; }); });
   elDelete.addEventListener("click", deleteSession);
@@ -620,12 +892,13 @@
       throw err;
     }) : historyEntries.length ? openSession(historyEntries[0].session_id) : newSession();
   }
-  loadStatus().then(loadSessions).then(bootstrap).catch(function (err) { errorMessage(err.message); });
+  loadStatus().then(loadSessions).then(bootstrap).catch(function (err) { errorMessage(err.message); }).then(function () { return refreshScene(); });
   var ticks = 0;
   setInterval(function () {
     ticks++;
     if (failures && ticks % Math.min(10, failures + 1)) return;
     poll();
+    if (ticks % 15 === 0 && !sceneBusy && !sessionBusy && !globalBusy) refreshScene();
     if (ticks % 10 === 0 || !archiveReady) loadStatus().then(loadSessions).then(function () {
       if (!bootAttempted && archiveReady) return bootstrap();
     }).catch(function (err) { elHistoryStatus.textContent = "Список недоступен: " + err.message; });

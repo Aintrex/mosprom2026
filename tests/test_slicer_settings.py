@@ -281,7 +281,7 @@ class SettingsTests(unittest.TestCase):
     def test_registry_and_protocol(self):
         tools = self.dispatch({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]
         self.assertEqual(tools, self.tools.list_tools())
-        self.assertEqual([t["name"] for t in tools], ["assistant_status", "get_setting", "set_setting", "get_slicer_state", "set_print_mode", "list_quality_profiles", "list_materials", "select_profile", "select_material", "load_model", "list_models", "get_model_bounds", "start_slicing", "get_slicing_status", "get_slicing_result", "export_gcode", "save_project_3mf", "get_export_status", "describe_settings", "get_model_state", "move_model", "rotate_model", "scale_model", "delete_model", "arrange_models", "get_arrangement_status", "load_model_file", "list_custom_profiles", "create_custom_profile", "select_custom_profile", "save_custom_profile"])
+        self.assertEqual([t["name"] for t in tools], ["assistant_status", "get_setting", "set_setting", "get_slicer_state", "set_print_mode", "list_quality_profiles", "list_materials", "select_profile", "select_material", "load_model", "list_models", "get_model_bounds", "start_slicing", "get_slicing_status", "get_slicing_result", "export_gcode", "save_project_3mf", "get_export_status", "describe_settings", "get_model_state", "move_model", "rotate_model", "scale_model", "delete_model", "arrange_models", "get_arrangement_status", "load_model_file", "list_custom_profiles", "create_custom_profile", "select_custom_profile", "save_custom_profile", "wait_for_slicing", "wait_for_export"])
         schema = tools[2]["inputSchema"]
         self.assertEqual(set(schema["required"]), {"key", "scope", "value"})
         self.assertEqual(schema["properties"]["value"]["type"], ["number", "boolean", "string"])
@@ -361,8 +361,8 @@ class CompatibilityTests(unittest.TestCase):
             reader.daemon = True
             reader.start()
             line = lines.get(timeout=5).decode("utf-8").strip()
-            self.assertTrue(line.startswith("Scaffold: http://127.0.0.1:"), line)
-            base = line.split(" ", 1)[1]
+            self.assertTrue(line.startswith("Dev UI: http://127.0.0.1:"), line)
+            base = line.rsplit(" ", 1)[1]
             body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
                 "name": "get_setting", "arguments": {"key": "layer_height", "scope": "global"}}}).encode("utf-8")
             with urlopen(Request(base + "mcp", data=body, headers={"Content-Type": "application/json"}), timeout=3) as response:

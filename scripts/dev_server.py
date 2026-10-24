@@ -1,4 +1,7 @@
-"""Run the scaffold without importing STE Slicer or Qt."""
+"""Run the chat UI without STE Slicer or Qt (dev mode: slicer tools report errors).
+
+Usage: python scripts/dev_server.py [port]
+"""
 import os
 import sys
 
@@ -11,8 +14,8 @@ from AIAssistant.server import create_server
 
 def main():
     service = AgentService()
-    server = create_server(service)
-    print("Scaffold: http://127.0.0.1:%d/" % server.server_port, flush=True)
+    server = create_server(service, int(sys.argv[1]) if len(sys.argv) > 1 else 0)
+    print("Dev UI: http://127.0.0.1:%d/" % server.server_port, flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

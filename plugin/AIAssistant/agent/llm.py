@@ -35,8 +35,13 @@ def sanitize_secret(text, api_key=None):
 
 def mcp_tools_to_openai(mcp_tools, exclude_names=None):
     excluded = set(exclude_names or [])
+
+    def parameters(schema):
+        # OpenAI-compatible providers may reject oneOf/anyOf/allOf at the top level of
+        # function parameters; MCP keeps the full schema, validation stays server-side.
+        return {k: v for k, v in schema.items() if k not in ("oneOf", "anyOf", "allOf")}
     return [{"type": "function", "function": {"name": tool["name"],
-             "description": tool.get("description", ""), "parameters": tool["inputSchema"]}}
+             "description": tool.get("description", ""), "parameters": parameters(tool["inputSchema"])}}
             for tool in mcp_tools if tool["name"] not in excluded]
 
 
@@ -75,7 +80,7 @@ class ChatCompletionsClient(object):
         if not self._lock.acquire(False):
             raise LLMError("request_busy", "Предыдущий сетевой вызов ещё завершается; не повторяйте автоматически")
         self._abandon.clear()
-        timeout = min(30.0, timeout)
+        timeout = min(60.0, timeout)
         deadline = time.monotonic() + timeout
         payload = {"model": config_snapshot["model"], "messages": messages, "stream": False}
         if tools:

@@ -103,8 +103,9 @@ class Arrangement(object):
         prefs = app.getPreferences()
         if prefs.getValue("general/auto_slice") is not False:
             raise SlicerError("auto_slicing_enabled", "Выключите auto-slice в UI перед расстановкой; Preferences не меняются")
-        if any(prefs.getValue(key) is not False for key in ("physics/automatic_drop_down", "physics/automatic_push_free")):
-            raise SlicerError("arrangement_unsupported", "Выключите Automatic drop down и push free в UI; Preferences не меняются")
+        # drop_down only re-seats models vertically; target geometry is compared relative to origin.
+        if prefs.getValue("physics/automatic_push_free") is not False:
+            raise SlicerError("arrangement_unsupported", "Выключите «Автоматически раздвигать модели» (push free) в настройках STE; Preferences не меняются")
         local = app.getOutputDeviceManager().getOutputDevice("local_file")
         if backend_busy(backend) or local is not None and local._writing:
             raise SlicerError("arrangement_busy", "Backend или штатная запись ещё заняты")

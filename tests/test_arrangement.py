@@ -255,9 +255,9 @@ class ArrangementTests(unittest.TestCase):
         self.app.auto_slice = True
         denied("auto_slicing_enabled")
         self.app.auto_slice = False
-        self.physics["physics/automatic_drop_down"] = True
+        self.physics["physics/automatic_push_free"] = True
         denied("arrangement_unsupported")
-        self.physics["physics/automatic_drop_down"] = False
+        self.physics["physics/automatic_push_free"] = False
         self.node.plate = self.other.plate = 1
         denied("empty_scene")
         self.node.plate = self.other.plate = 0

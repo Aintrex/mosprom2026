@@ -109,7 +109,8 @@ class NumericArgumentsTests(unittest.TestCase):
                 seen[key] = branch["properties"]["value"]["type"]
         self.assertEqual(seen, {key: types[kind] for key, kind in SETTING_TYPES.items()})
         projected = next(t for t in mcp_tools_to_openai(tools) if t["function"]["name"] == "set_setting")
-        self.assertEqual(projected["function"]["parameters"], setter)
+        # LLM projection drops only the top-level oneOf (provider compatibility); server validation is unchanged.
+        self.assertEqual(projected["function"]["parameters"], {k: v for k, v in setter.items() if k != "oneOf"})
 
     def test_repeated_invalid_semantics_with_new_call_ids_stops_before_third_request(self):
         bad = self.arguments(value="0,12")

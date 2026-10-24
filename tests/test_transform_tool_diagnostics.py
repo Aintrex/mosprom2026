@@ -85,7 +85,8 @@ class TransformToolDiagnosticsTests(unittest.TestCase):
         self.assertEqual(len(self.ops.operations), 1)
 
     def test_preflight_physics_preview_busy_parent_plate_and_stale_id_never_push(self):
-        cases = [(lambda: self.physics.update({"physics/automatic_drop_down": True}), lambda: self.physics.update({"physics/automatic_drop_down": False})),
+        # drop_down (STE default on) is allowed with a warning; push_free still blocks.
+        cases = [(lambda: self.physics.update({"physics/automatic_push_free": True}), lambda: self.physics.update({"physics/automatic_push_free": False})),
                  (lambda: self.physics.update({"physics/automatic_push_free": None}), lambda: self.physics.update({"physics/automatic_push_free": False})),
                  (lambda: setattr(self.node, "preview", True), lambda: setattr(self.node, "preview", False)),
                  (lambda: setattr(self.device, "_writing", True), lambda: setattr(self.device, "_writing", False)),
@@ -129,13 +130,13 @@ class TransformToolDiagnosticsTests(unittest.TestCase):
             self.assertEqual(rpc["error"]["code"], -32602)
         self.complete()
         self.assertTrue(self.status()["valid"])
-        self.physics["physics/automatic_drop_down"] = True
+        self.physics["physics/automatic_push_free"] = True
         for operation in (lambda: self.adapter.move_model(self.object_id, {"x": 2, "y": 3, "z": 4}),
                           lambda: self.adapter.scale_model(self.object_id, {"x": 2, "y": 1, "z": 1}),
                           lambda: self.adapter.delete_model(self.object_id)):
             self.assertEqual(operation()["error"]["stage"], "preflight")
         self.assertTrue(self.status()["valid"])
-        self.physics["physics/automatic_drop_down"] = False
+        self.physics["physics/automatic_push_free"] = False
         self.assertTrue(self.adapter.rotate_model(self.object_id, "z", 90)["ok"])
         self.ops.undo()
         self.assertFalse(self.status()["valid"])
