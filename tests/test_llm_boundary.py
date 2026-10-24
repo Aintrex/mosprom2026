@@ -1,10 +1,12 @@
 """LLM-boundary argument repair and read-only wait tools, no STE/provider."""
+import json
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugin"))
 from AIAssistant.agent.tools import ToolRegistry
+from AIAssistant.agent.service import HISTORY_TOOL_CHARS, HISTORY_TOTAL_CHARS, compact_history, llm_view
 
 
 class FakeAdapter(object):
@@ -46,6 +48,33 @@ class CoercionTests(unittest.TestCase):
         args, notes = self.coerce("set_setting", {"key": "layer_height", "scope": "extruder", "value": 0.1, "extruder_id": None})
         self.assertIn("extruder_id", args)
         self.assertEqual(notes, [])
+
+
+class PayloadTests(unittest.TestCase):
+    def test_llm_view_rounds_and_compacts_materials(self):
+        result = {"ok": True, "data": {"bounds": {"x": 109.84250994460308}, "count": 3,
+                  "materials": [{"name": "PETG", "root_material_id": "generic_petg_175", "compatible": True,
+                                 "brand": "Generic", "material": "PETG", "material_id": "generic_petg_175"}]}}
+        view = json.loads(llm_view("list_materials", result))
+        self.assertEqual(view["data"]["bounds"]["x"], 109.843)
+        self.assertEqual(view["data"]["count"], 3)
+        self.assertEqual(view["data"]["materials"], [{"name": "PETG", "root_material_id": "generic_petg_175", "compatible": True}])
+        self.assertEqual(result["data"]["materials"][0]["brand"], "Generic", "UI copy is untouched")
+
+    def test_history_shortens_old_tool_output_and_drops_oldest_turns(self):
+        def turn(i, size):
+            return [{"role": "user", "content": "q%d" % i},
+                    {"role": "assistant", "content": None, "tool_calls": [{"id": "c%d" % i}]},
+                    {"role": "tool", "tool_call_id": "c%d" % i, "content": "x" * size},
+                    {"role": "assistant", "content": "a%d" % i}]
+        blocks = [turn(i, 5000) for i in range(80)]
+        kept = compact_history(blocks)
+        self.assertLess(len(kept), 80)
+        self.assertEqual(kept[-1][0]["content"], "q79", "Newest turn is always kept")
+        self.assertTrue(all(len(b[2]["content"]) <= HISTORY_TOOL_CHARS + 60 for b in kept))
+        self.assertTrue(all(b[2]["tool_call_id"] == "c" + b[0]["content"][1:] for b in kept), "Tool pairs stay intact")
+        self.assertLessEqual(sum(len(e["content"] or "") for b in kept for e in b), HISTORY_TOTAL_CHARS + 1000)
+        self.assertEqual(len(blocks[0][2]["content"]), 5000, "Stored history is not modified")
 
 
 class WaitTests(unittest.TestCase):

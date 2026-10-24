@@ -18,7 +18,7 @@ import test_slicer_settings as settings_tests
 import test_slicer_slicing as slicing_tests
 import test_print_settings as print_tests
 from AIAssistant.agent.config import PreferencesConfigStore, validate_config
-from AIAssistant.agent.llm import ChatCompletionsClient, LLMError, sanitize_secret
+from AIAssistant.agent.llm import ChatCompletionsClient, LLMError, mcp_tools_to_openai, sanitize_secret
 from AIAssistant.agent.service import AgentService, APIError, MAX_LLM_STEPS, MAX_TOOL_CALLS, TOTAL_BUDGET_SECONDS
 from AIAssistant.server import create_server
 from AIAssistant.slicer.qt_bridge import QtBridge, SlicerError
@@ -172,7 +172,7 @@ class ClientTests(unittest.TestCase):
         req, kwargs = captured[0]
         self.assertEqual(req.full_url, CONFIG["base_url"] + "/chat/completions")
         self.assertEqual(req.get_header("Authorization"), "Bearer " + CONFIG["api_key"])
-        self.assertEqual(kwargs["timeout"], 60)
+        self.assertEqual(kwargs["timeout"], 99)  # Below the 120 s client cap.
         self.assertEqual(kwargs["context"].verify_mode, ssl.CERT_REQUIRED)
         self.assertTrue(kwargs["context"].check_hostname)
         payload = json.loads(req.data.decode("utf-8"))
@@ -269,7 +269,9 @@ class AgentTests(unittest.TestCase):
         schemas = self.llm.requests[0][2]
         expected = [t for t in self.tools.list_tools() if t["name"] not in ("assistant_status", "load_model")]
         self.assertEqual({t["function"]["name"]: t["function"]["parameters"] for t in schemas},
-                         {t["name"]: {k: v for k, v in t["inputSchema"].items() if k != "oneOf"} for t in expected})
+                         {t["function"]["name"]: t["function"]["parameters"] for t in mcp_tools_to_openai(expected)})
+        setter = next(t["function"]["parameters"] for t in schemas if t["function"]["name"] == "set_setting")
+        self.assertEqual(len(setter["properties"]["key"]["enum"]), 120)  # Full key list is still sent once.
         self.assertEqual([m["role"] for m in self.llm.requests[1][1]], ["system", "user", "assistant", "tool", "tool"])
         self.assertEqual(self.snapshot()["agent_state"], "idle")
         self.assertEqual(len(self.snapshot()["messages"]), 2)

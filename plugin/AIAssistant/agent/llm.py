@@ -40,8 +40,18 @@ def mcp_tools_to_openai(mcp_tools, exclude_names=None):
         # OpenAI-compatible providers may reject oneOf/anyOf/allOf at the top level of
         # function parameters; MCP keeps the full schema, validation stays server-side.
         return {k: v for k, v in schema.items() if k not in ("oneOf", "anyOf", "allOf")}
+
+    def slim(tool):
+        # The 120-key enum is sent once (set_setting); read tools validate keys server-side.
+        schema = parameters(tool["inputSchema"])
+        if tool["name"] in ("get_setting", "describe_settings"):
+            schema = json.loads(json.dumps(schema))
+            props = schema.get("properties", {})
+            props.get("key", {}).pop("enum", None)
+            props.get("keys", {}).get("items", {}).pop("enum", None)
+        return schema
     return [{"type": "function", "function": {"name": tool["name"],
-             "description": tool.get("description", ""), "parameters": parameters(tool["inputSchema"])}}
+             "description": tool.get("description", ""), "parameters": slim(tool)}}
             for tool in mcp_tools if tool["name"] not in excluded]
 
 
@@ -80,7 +90,7 @@ class ChatCompletionsClient(object):
         if not self._lock.acquire(False):
             raise LLMError("request_busy", "Предыдущий сетевой вызов ещё завершается; не повторяйте автоматически")
         self._abandon.clear()
-        timeout = min(60.0, timeout)
+        timeout = min(120.0, timeout)
         deadline = time.monotonic() + timeout
         payload = {"model": config_snapshot["model"], "messages": messages, "stream": False}
         if tools:

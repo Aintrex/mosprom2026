@@ -350,7 +350,10 @@
     else if (/_busy$/.test(code) || code === "switch_in_progress") title = "Слайсер занят другой операцией";
     else if (/_failed$/.test(code)) title = "Слайсер сообщил об ошибке";
     var reason = typeof error.message === "string" ? error.message : "Причина не сообщена.";
-    if (networkTimeout) reason = "Время ожидания ответа истекло. Уже выполненные инструменты и работа слайсера этим не отменяются.";
+    if (networkTimeout) {
+      reason = "Время ожидания ответа истекло. Уже выполненные инструменты и работа слайсера этим не отменяются.";
+      next = "Напишите «продолжай» — агент продолжит с текущего состояния сцены, не повторяя выполненные шаги.";
+    }
     if (rejected) reason = reason.replace("типу float", "числовому типу").replace("типу int", "целому числу")
       .replace("типу bool", "логическому типу").replace("типу enum", "значению из списка");
     return {title: title, lines: [reason, next]};

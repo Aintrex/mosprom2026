@@ -19,8 +19,10 @@ from ..downloads import DownloadRegistry, DownloadError, PUBLIC_FIELDS
 
 LOGGER = logging.getLogger(__name__)
 MAX_LLM_STEPS, MAX_TOOL_CALLS = 20, 40
-TOTAL_BUDGET_SECONDS, SINGLE_REQUEST_TIMEOUT_SECONDS = 300.0, 60.0
+TOTAL_BUDGET_SECONDS, SINGLE_REQUEST_TIMEOUT_SECONDS = 480.0, 120.0
 MAX_HISTORY_BLOCKS, MAX_EVENTS, EVENT_PAGE = 12, 1000, 100
+# Request size drives provider latency: old tool results are shortened, old turns dropped.
+HISTORY_TOOL_CHARS, HISTORY_TOTAL_CHARS = 600, 24000
 MAX_SESSIONS, MAX_TURNS, MAX_TEXT = 32, 512, 12000
 MAX_ATTACHMENTS, MESSAGE_IMAGE_BYTES = 5, 10 * 1024 * 1024
 OBSERVATION_INTERVAL, OBSERVATION_ERRORS = 1.0, 4
@@ -45,6 +47,8 @@ SYSTEM_PROMPT = (
     "(трубы, втулки, валы, стаканы, детали со свесами вокруг оси): меньше поддержек и прочнее в радиальном направлении. "
     "Если пользователь явно назвал режим (3D/5D/спираль), используй его. set_print_mode вызывай до импорта модели, на пустой сцене. "
     "3) list_materials/select_material по реальному root ID (PLA/PETG/ABS и т.п. из запроса), затем list_quality_profiles/select_profile. "
+    "Перед импортом вызови list_models: если на сцене уже есть другие модели, скажи пользователю, что нарезка возьмёт все модели "
+    "и режим на непустой сцене не переключается; удаляй их delete_model только с его согласия. "
     "4) load_model_file по file_id вложения; затем list_models и get_model_state (габариты, outside_build_area). "
     "5) Ориентация: широкая плоская грань на стол, минимум свесов; для нагруженных деталей слои поперёк нагрузки не ставь. "
     "rotate_model axis=x/z кладёт модель на бок, axis=y вращает в плоскости стола. В classic при нескольких моделях — arrange_models. "
@@ -101,6 +105,43 @@ def safe_data(value, secret):
     if isinstance(value, list):
         return [safe_data(v, secret) for v in value]
     return sanitize_secret(value, secret) if isinstance(value, str) else value
+
+
+def llm_view(name, result):
+    """Compact copy of a tool result for the LLM; the UI keeps the full result."""
+    def shrink(value):
+        if isinstance(value, float):
+            return round(value, 3)
+        if isinstance(value, dict):
+            return {k: shrink(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [shrink(v) for v in value]
+        return value
+    view = shrink(result)
+    data = view.get("data") if isinstance(view, dict) else None
+    if name == "list_materials" and isinstance(data, dict) and isinstance(data.get("materials"), list):
+        data["materials"] = [{k: m.get(k) for k in ("name", "root_material_id", "compatible")}
+                             for m in data["materials"] if isinstance(m, dict)]
+    return json.dumps(view, ensure_ascii=False, allow_nan=False)
+
+
+def compact_history(blocks):
+    """Shorten old tool outputs and keep the newest turns within a character budget."""
+    result, total = [], 0
+    for block in reversed(blocks):
+        entries = []
+        for entry in block:
+            entry = dict(entry)
+            content = entry.get("content")
+            if entry.get("role") == "tool" and isinstance(content, str) and len(content) > HISTORY_TOOL_CHARS:
+                entry["content"] = content[:HISTORY_TOOL_CHARS] + "… [сокращено; перечитай инструментом, если нужно]"
+            entries.append(entry)
+        size = sum(len(e["content"]) if isinstance(e.get("content"), str) else 200 for e in entries)
+        if result and total + size > HISTORY_TOTAL_CHARS:
+            break
+        result.insert(0, entries)
+        total += size
+    return result
 
 
 def json_arguments(raw):
@@ -511,7 +552,7 @@ class AgentService(object):
                     raise LLMError("step_limit", "Достигнут лимит %d обращений к LLM" % MAX_LLM_STEPS)
                 steps += 1
                 with self._lock:
-                    history = copy.deepcopy(self._session(session_id)["llm_blocks"][-MAX_HISTORY_BLOCKS:])
+                    history = compact_history(copy.deepcopy(self._session(session_id)["llm_blocks"][-MAX_HISTORY_BLOCKS:]))
                 messages = [{"role": "system", "content": system_prompt}]
                 for index, previous in enumerate(history):
                     # Only the previous turn keeps its photos (follow-up questions); older ones are
@@ -532,7 +573,8 @@ class AgentService(object):
                     waited = max(0.0, self.clock() - call_started)
                     raise LLMError("network_timeout",
                         "Сетевой timeout в LLM-обращении №%d: ожидание complete %.3f с; выделенный бюджет %.3f с; "
-                        "остаток бюджета хода перед обращением %.3f с. Ответ не получен вовремя; автоматического повтора нет" %
+                        "остаток бюджета хода перед обращением %.3f с. Ответ не получен вовремя; автоматического повтора нет. "
+                        "Уже выполненные шаги сохранены: напишите «продолжай», и агент продолжит с текущего состояния" %
                         (steps, waited, call_budget, remaining))
                 self._alive(token, deadline)
                 calls, content = self._answer(answer, seen)
@@ -611,8 +653,7 @@ class AgentService(object):
                         normalized = True
                         result = dict(result, argument_admission=admission)
                     result = safe_data(result, cfg["api_key"])
-                    block.append({"role": "tool", "tool_call_id": call["id"],
-                                  "content": json.dumps(result, ensure_ascii=False, allow_nan=False)})
+                    block.append({"role": "tool", "tool_call_id": call["id"], "content": llm_view(name, result)})
                     self._publish(session_id, token, "tool_finished",
                                   {"tool_call_id": call["id"], "name": name, "result": result}, cfg["api_key"])
                     self._remember_result(session_id, token, name, result, receipt, cfg["api_key"])
