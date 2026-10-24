@@ -121,7 +121,13 @@ class Writer(object):
             archive = zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED)
             self.app.mesh_project.archive = archive
             archive.writestr("3D/3dmodel.model", b"<broken" if self.behavior == "bad_xml" else MODEL)
-            if self.behavior != "mesh_only":
+            if self.behavior == "renamed_workspace":
+                # Issued build layout differing from the public sources (observed failure on 24.10).
+                archive.writestr("SteSlicer/machine_instance.global.cfg", b"[general]\nname=fixture\n")
+                archive.writestr("SteSlicer/version.ini", b"[versions]\n")
+            elif self.behavior == "empty_workspace":
+                archive.writestr("SteSlicer/preferences.cfg", b"")
+            elif self.behavior != "mesh_only":
                 for name in exports.workspace_files(self.app, self.app.stack):
                     archive.writestr(name, b"[general]\nname=fixture\n")
             archive.close()
@@ -529,6 +535,25 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(len(foreign), 1)
         with original_open(foreign[0], "rb") as stream:
             self.assertEqual(stream.read(), b"foreign content")
+
+    def test_renamed_workspace_is_published_with_warning_but_mesh_only_or_empty_fail(self):
+        self.app.project.behavior = "renamed_workspace"
+        record = self.launch("project")
+        with mock.patch.object(exports.LOGGER, "warning") as warning:
+            status = self.wait_status()
+        self.assertEqual(status["state"], "completed", status)
+        self.assertTrue(status["valid"])
+        self.assertTrue(status["artifact"]["file_name"].endswith(".3mf"))
+        self.assertIn("отличается от ожидаемого", status["warnings"][0])
+        self.assertTrue(warning.called)
+        self.wait_cleanup(record)
+        for behavior in ("mesh_only", "empty_workspace"):
+            self.app.project.behavior = behavior
+            record = self.launch("project")
+            with mock.patch.object(exports.LOGGER, "error"):
+                status = self.wait_status()
+            self.assertEqual((status["state"], status["error"]["code"]), ("failed", "export_invalid_file"))
+            self.wait_cleanup(record)
 
     def test_partial_publication_and_preparation_timeout_do_not_publish(self):
         def partial(source, target):

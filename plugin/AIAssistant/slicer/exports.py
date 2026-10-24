@@ -49,11 +49,21 @@ def workspace_files(app, stack):
     return files | {"SteSlicer/preferences.cfg", "SteSlicer/version.ini"}
 
 
+# Parts written by the 3MF mesh writer; everything else is workspace configuration.
+MESH_PARTS = ("3D/", "_rels/", "[Content_Types].xml", "Metadata/")
+
+
 def verify_project(path, expected):
+    """Hard checks: sound ZIP, printable geometry, non-empty workspace config.
+
+    The expected container file names are derived from the public STE sources; the issued
+    build (7.10.12) may name/lay them out differently, so a mismatch is reported as a
+    warning instead of rejecting the native writer's real file (seen in STE on 24.10).
+    """
     with zipfile.ZipFile(path, "r") as archive:
         names = archive.namelist()
-        if len(names) != len(set(names)) or not expected.issubset(set(names)) or archive.testzip() is not None:
-            raise SlicerError("export_invalid_file", "3MF не содержит подтверждённой workspace-конфигурации или повреждён")
+        if len(names) != len(set(names)) or archive.testzip() is not None:
+            raise SlicerError("export_invalid_file", "3MF повреждён: повторяющиеся или битые записи ZIP")
         model = ET.fromstring(archive.read("3D/3dmodel.model"))
         resources, build = model.find(CORE + "resources"), model.find(CORE + "build")
         if model.tag != CORE + "model" or resources is None or build is None:
@@ -64,9 +74,18 @@ def verify_project(path, expected):
                         obj.find("%smesh/%striangles/%striangle" % (CORE, CORE, CORE)) is not None
                         for obj in objects.values())):
             raise SlicerError("export_invalid_file", "3MF не содержит печатной геометрии/build")
-        for name in expected:
-            if not archive.getinfo(name).file_size:
-                raise SlicerError("export_invalid_file", "Пустая workspace-конфигурация 3MF")
+        workspace = [n for n in names if not n.startswith(MESH_PARTS) and not n.endswith("/")]
+        if not workspace:
+            raise SlicerError("export_invalid_file", "В 3MF только сетка: нет workspace-конфигурации (режим, профиль, материал, настройки)")
+        if any(not archive.getinfo(n).file_size for n in workspace):
+            raise SlicerError("export_invalid_file", "Пустой файл workspace-конфигурации в 3MF")
+        missing = sorted(expected - set(names))
+        if missing:
+            LOGGER.warning("3MF workspace names differ from expectation: missing %d, present %s", len(missing), sorted(workspace)[:20])
+            return ["Проект сохранён штатным writer STE, но состав конфигурации отличается от ожидаемого: нет %s%s. "
+                    "Откройте project.3mf в STE и проверьте режим, профиль и материал." %
+                    (", ".join(missing[:5]), " и ещё %d" % (len(missing) - 5) if len(missing) > 5 else "")]
+        return []
 
 
 def verify_gcode(path, chunks):
@@ -93,6 +112,7 @@ class _Export(object):
         self.events = queue.Queue()
         self.finished, self.publish, self.accept = threading.Event(), threading.Event(), threading.Event()
         self.native_ok = self.publish_ok = self.accepted = False
+        self.warnings = []
 
 
 class Exports(object):
@@ -290,12 +310,12 @@ class Exports(object):
                 raise SlicerError("export_invalid_file", "Штатный writer создал пустой файл")
             try:
                 if record.kind == "project":
-                    verify_project(staging, record.expected)
+                    warnings = verify_project(staging, record.expected)
                 else:
                     verify_gcode(staging, record.chunks)
             except (zipfile.BadZipFile, ET.ParseError, KeyError, ValueError):
                 raise SlicerError("export_invalid_file", "Файл не прошёл проверку ZIP/XML/данных engine")
-            record.events.put(("verified", None))
+            record.events.put(("verified", warnings if record.kind == "project" else []))
             if not self._wait(record, record.publish) or not record.publish_ok:
                 return
             # Эксклюзивное создание: существующий пользовательский файл не затирается.
@@ -377,6 +397,7 @@ class Exports(object):
                     LOGGER.error("Export job start: %s", type(exc).__name__)
                     self._fail(record, "export_failed", "Ошибка запуска WriteFileJob; если job принят, дождитесь выхода, при зависании перезапустите приложение")
             elif event == "verified" and record.state == "running":
+                record.warnings = list(data or [])
                 record.publish_ok = True
                 record.publish.set()
             elif event == "published" and record.state == "running":
@@ -415,7 +436,8 @@ class Exports(object):
                 pass  # Исторический файл остаётся привязан к прежнему slice_id.
         return {"export_id": record.export_id, "slice_id": record.slice_id, "kind": record.kind,
                 "state": record.state, "progress": record.progress, "error": copy.deepcopy(record.error),
-                "artifact": copy.deepcopy(record.artifact), "local_directory": record.directory, "valid": valid}
+                "artifact": copy.deepcopy(record.artifact), "local_directory": record.directory, "valid": valid,
+                "warnings": list(record.warnings)}
 
     def status(self, app, export_id):
         self._tick()

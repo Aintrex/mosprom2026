@@ -7,112 +7,137 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div class="layout">
-    <aside class="sidebar">
-      <div class="brand">
-        <h1>STE Slicer AI</h1>
-        <span id="status-badge" class="badge">Проверка...</span>
-      </div>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M16 3 28 10v12L16 29 4 22V10z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
+        <path d="M4 10l12 7 12-7M16 17v12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
+        <circle cx="25.5" cy="6.5" r="4" fill="#30B6E7"/>
+      </svg>
+      <div class="brand-text"><strong>STE Slicer</strong><span>AI Assistant</span></div>
+    </div>
+    <div class="topbar-status" aria-label="Состояние">
+      <span class="pill"><span class="pill-label">LLM</span><span id="status-badge" class="badge">Проверка…</span></span>
+      <span class="pill"><span class="pill-label">Принтер</span><strong id="st-printer">—</strong></span>
+      <span class="pill"><span class="pill-label">Режим</span><strong id="st-mode">—</strong></span>
+    </div>
+  </header>
 
-      <details class="card chat-history" id="chat-history">
-        <summary>Диалоги</summary>
-        <p id="history-status" role="status">Чтение списка…</p>
-        <div id="chat-list" role="list" aria-label="Список диалогов"></div>
-        <div class="history-actions">
-          <button id="btn-open-session" class="btn">Открыть</button>
-          <button id="btn-delete-session" class="btn">Удалить</button>
+  <div class="layout">
+    <aside class="sidebar" aria-label="Панель управления">
+      <details class="panel chat-history" id="chat-history">
+        <summary class="panel-head">Диалоги</summary>
+        <div class="panel-body">
+          <p id="history-status" class="hint" role="status">Чтение списка…</p>
+          <div id="chat-list" role="list" aria-label="Список диалогов"></div>
+          <div class="history-actions">
+            <button id="btn-open-session" class="btn">Открыть</button>
+            <button id="btn-delete-session" class="btn ghost">Удалить</button>
+          </div>
         </div>
       </details>
 
-      <section class="card">
-        <h2>Состояние среды</h2>
-        <div class="kv"><span>Принтер:</span><strong id="st-printer">—</strong></div>
-        <div class="kv"><span>Режим:</span><strong id="st-mode">—</strong></div>
-        <p>Настройки, качество и материалы можно запросить в чате.</p>
-        <div id="slice-state">Снимков нарезки ещё нет.</div>
-        <div id="export-state">Своих экспортов ещё нет.</div>
-      </section>
-
-      <section class="card" id="scene-card" aria-labelledby="scene-title">
-        <div class="card-head">
-          <h2 id="scene-title">Модели на сцене</h2>
-          <button id="btn-scene-refresh" class="btn small" type="button">Обновить</button>
-        </div>
-        <p id="scene-status" class="hint" role="status">Сцена ещё не прочитана.</p>
-        <div id="scene-list" role="list" aria-label="Модели текущей сцены STE"></div>
-        <div id="scene-controls" class="scene-controls">
-          <p id="scene-selected" class="hint">Выберите модель в списке.</p>
-          <p class="hint">Оси мира STE: <strong>Y — вверх</strong> (печатная Z), X и Z — плоскость стола; единицы — мм. Отменить действие: Ctrl+Z в окне STE Slicer.</p>
-          <fieldset>
-            <legend>Поворот, градусы</legend>
-            <div class="field-row">
-              <label>Ось <select id="rot-axis"><option value="x">X</option><option value="y">Y (вертикаль)</option><option value="z">Z</option></select></label>
-              <label>Угол <input id="rot-angle" type="text" inputmode="decimal" autocomplete="off" placeholder="90"></label>
-            </div>
-            <button id="btn-rotate" class="btn" type="button">Повернуть</button>
-          </fieldset>
-          <fieldset>
-            <legend>Позиция origin в мире, мм</legend>
-            <div class="field-row three">
-              <label>X <input id="move-x" type="text" inputmode="decimal" autocomplete="off"></label>
-              <label>Y↑ <input id="move-y" type="text" inputmode="decimal" autocomplete="off"></label>
-              <label>Z <input id="move-z" type="text" inputmode="decimal" autocomplete="off"></label>
-            </div>
-            <button id="btn-move" class="btn" type="button">Переместить</button>
-          </fieldset>
-          <fieldset>
-            <legend>Масштаб, множитель (1 — без изменений)</legend>
-            <div class="field-row three">
-              <label>X <input id="scale-x" type="text" inputmode="decimal" autocomplete="off" value="1"></label>
-              <label>Y↑ <input id="scale-y" type="text" inputmode="decimal" autocomplete="off" value="1"></label>
-              <label>Z <input id="scale-z" type="text" inputmode="decimal" autocomplete="off" value="1"></label>
-            </div>
-            <button id="btn-scale" class="btn" type="button">Масштабировать</button>
-          </fieldset>
-          <button id="btn-center-model" class="btn" type="button" title="Центр габаритов в x=0, z=0 — ось 5D-основания">Поставить по центру стола</button>
-          <button id="btn-delete-model" class="btn danger" type="button">Удалить модель из сцены…</button>
-          <p id="scene-reason" class="hint warn-text" role="status"></p>
-          <div id="scene-result" class="scene-result" aria-live="polite"></div>
+      <section class="panel" aria-labelledby="job-title">
+        <h2 class="panel-head" id="job-title">Нарезка и файлы</h2>
+        <div class="panel-body">
+          <div id="slice-state" class="state-block">Снимков нарезки ещё нет.</div>
+          <div id="export-state" class="state-block">Своих экспортов ещё нет.</div>
         </div>
       </section>
 
-      <section class="card">
-        <h2>Настройки LLM</h2>
-        <p>URL, модель и ключ задаются в меню STE Slicer: <strong>AI Assistant → LLM Settings</strong>.</p>
-        <p id="cfg-state">Настройки ещё не прочитаны.</p>
+      <details class="panel" id="scene-card" open>
+        <summary class="panel-head">Модели на сцене</summary>
+        <div class="panel-body">
+          <div class="card-head">
+            <p id="scene-status" class="hint" role="status">Сцена ещё не прочитана.</p>
+            <button id="btn-scene-refresh" class="btn small ghost" type="button">Обновить</button>
+          </div>
+          <div id="scene-list" role="list" aria-label="Модели текущей сцены STE"></div>
+          <div id="scene-controls" class="scene-controls">
+            <p id="scene-selected" class="selected-model">Выберите модель в списке.</p>
+            <p class="hint">Оси как в STE: <span class="axis ax-x">X</span> и <span class="axis ax-z">Z</span> — плоскость стола, <span class="axis ax-y">Y↑</span> — вверх; единицы — мм. Отмена: Ctrl+Z в окне STE.</p>
+            <fieldset>
+              <legend>Поворот, градусы</legend>
+              <div class="field-row">
+                <label>Ось <select id="rot-axis"><option value="x">X</option><option value="y">Y↑ (вертикаль)</option><option value="z">Z</option></select></label>
+                <label>Угол <input id="rot-angle" type="text" inputmode="decimal" autocomplete="off" placeholder="90"></label>
+              </div>
+              <button id="btn-rotate" class="btn" type="button">Повернуть</button>
+            </fieldset>
+            <fieldset>
+              <legend>Позиция origin, мм</legend>
+              <div class="field-row three">
+                <label><span class="axis ax-x">X</span><input id="move-x" type="text" inputmode="decimal" autocomplete="off"></label>
+                <label><span class="axis ax-y">Y↑</span><input id="move-y" type="text" inputmode="decimal" autocomplete="off"></label>
+                <label><span class="axis ax-z">Z</span><input id="move-z" type="text" inputmode="decimal" autocomplete="off"></label>
+              </div>
+              <button id="btn-move" class="btn" type="button">Переместить</button>
+            </fieldset>
+            <fieldset>
+              <legend>Масштаб, множитель</legend>
+              <div class="field-row three">
+                <label><span class="axis ax-x">X</span><input id="scale-x" type="text" inputmode="decimal" autocomplete="off" value="1"></label>
+                <label><span class="axis ax-y">Y↑</span><input id="scale-y" type="text" inputmode="decimal" autocomplete="off" value="1"></label>
+                <label><span class="axis ax-z">Z</span><input id="scale-z" type="text" inputmode="decimal" autocomplete="off" value="1"></label>
+              </div>
+              <button id="btn-scale" class="btn" type="button">Масштабировать</button>
+            </fieldset>
+            <div class="scene-actions">
+              <button id="btn-center-model" class="btn" type="button" title="Центр габаритов в x=0, z=0 — ось 5D-основания">По центру стола</button>
+              <button id="btn-delete-model" class="btn danger" type="button">Удалить…</button>
+            </div>
+            <p id="scene-reason" class="hint warn-text" role="status"></p>
+            <div id="scene-result" class="scene-result" aria-live="polite"></div>
+          </div>
+        </div>
+      </details>
+
+      <section class="panel" aria-labelledby="quick-title">
+        <h2 class="panel-head" id="quick-title">Быстрые запросы</h2>
+        <div class="panel-body chips">
+          <button class="chip primary-chip" data-prompt="Подготовь прикреплённую модель к печати: выбери режим (3D или 5D), материал и профиль, импортируй и сориентируй модель, нарежь и сохрани G-code и проект 3MF. Объясни принятые решения.">Подготовить модель к печати</button>
+          <button class="chip" data-prompt="Прочитай текущую высоту слоя layer_height.">Прочитать высоту слоя</button>
+          <button class="chip" data-prompt="Установи высоту слоя layer_height равной 0.12 мм и подтверди изменение.">Слой 0.12 мм</button>
+          <button class="chip" data-prompt="Прочитай состояние машины и фактический backend через get_slicer_state.">Состояние STE</button>
+          <button class="chip" data-prompt="Что ты умеешь и какие инструменты тебе доступны?">Что умеешь?</button>
+        </div>
       </section>
 
-      <section class="card">
-        <h2>Быстрые запросы</h2>
-        <button class="chip" data-prompt="Подготовь прикреплённую модель к печати: выбери режим (3D или 5D), материал и профиль, импортируй и сориентируй модель, нарежь и сохрани G-code и проект 3MF. Объясни принятые решения.">Подготовить модель к печати</button>
-        <button class="chip" data-prompt="Прочитай текущую высоту слоя layer_height.">Прочитать layer_height</button>
-        <button class="chip" data-prompt="Установи высоту слоя layer_height равной 0.12 мм и подтверди изменение.">Установить слой 0.12 мм</button>
-        <button class="chip" data-prompt="Прочитай состояние машины и фактический backend через get_slicer_state.">Состояние STE Slicer</button>
-        <button class="chip" data-prompt="Что ты умеешь и какие инструменты тебе доступны?">Что умеешь?</button>
-      </section>
+      <details class="panel">
+        <summary class="panel-head">Подключение LLM</summary>
+        <div class="panel-body">
+          <p class="hint">URL, модель и ключ задаются в меню STE Slicer: <strong>Расширения → AI Assistant → LLM Settings</strong>.</p>
+          <p id="cfg-state" class="hint">Настройки ещё не прочитаны.</p>
+        </div>
+      </details>
     </aside>
 
     <main class="chat-panel">
       <header class="chat-header">
-        <div>
+        <div class="chat-heading">
           <strong id="chat-title">Диалог с ИИ-технологом</strong>
           <span id="save-state" class="sub" role="status"></span>
           <span id="agent-state-text" class="sub">Ожидание запроса</span>
         </div>
-        <button id="btn-new-session" class="btn">Новый диалог</button>
+        <button id="btn-new-session" class="btn primary">Новый диалог</button>
       </header>
 
       <div id="messages" class="messages" role="log" aria-label="Переписка и результаты инструментов"></div>
 
-      <div id="artifacts" class="attachment-bar" aria-live="polite"></div>
-      <div class="attachment-bar">
-        <label><span id="attachment-limits">Вложения: фото JPG/PNG и модели STL/OBJ/3MF (до 5)</span> <input id="chat-files" type="file" multiple accept=".jpg,.jpeg,.png,.stl,.obj,.3mf"></label>
+      <div class="composer">
+        <div id="artifacts" class="artifacts" aria-live="polite"></div>
         <div id="attachment-list" aria-live="polite"></div>
+        <form id="chat-form" class="chat-input-bar">
+          <label class="attach-btn" title="Прикрепить фото или модель">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.5 6.5 8.4 14.6a2 2 0 0 0 2.8 2.8l8.1-8.1a4 4 0 0 0-5.7-5.7L5.5 11.7a6 6 0 0 0 8.5 8.5l6.2-6.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="visually-hidden">Прикрепить файл</span>
+            <input id="chat-files" class="visually-hidden" type="file" multiple accept=".jpg,.jpeg,.png,.stl,.obj,.3mf">
+          </label>
+          <textarea id="chat-input" rows="2" maxlength="12000" placeholder="Например: «Кронштейн под нагрузку, PETG, без поддержек» и прикрепите STL"></textarea>
+          <button type="submit" id="btn-send" class="btn primary send">Отправить</button>
+        </form>
+        <p class="composer-hint"><span id="attachment-limits">Вложения: фото JPG/PNG и модели STL/OBJ/3MF (до 5)</span> · Enter — отправить, Shift+Enter — новая строка</p>
       </div>
-      <form id="chat-form" class="chat-input-bar">
-        <textarea id="chat-input" rows="2" maxlength="12000" placeholder="Например: «Кронштейн под нагрузку, PETG, без поддержек» + прикрепите STL. Enter — отправить, Shift+Enter — новая строка"></textarea>
-        <button type="submit" id="btn-send" class="btn primary">Отправить</button>
-      </form>
     </main>
   </div>
   <script src="/app.js"></script>

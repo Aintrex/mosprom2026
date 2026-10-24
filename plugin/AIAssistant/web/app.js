@@ -55,6 +55,7 @@
     elOpen.disabled = busy || !!pending || uploading || !historyChoice;
     elDelete.disabled = elOpen.disabled;
     for (var index = 0; index < elHistory.children.length; index++) elHistory.children[index].disabled = busy || !!pending || uploading;
+    elState.className = "sub" + (sessionBusy || globalBusy ? " busy" : "");
     sceneButtons();
   }
   function renderPersistence(value, partial) {
@@ -328,9 +329,9 @@
       "Материал: длина " + roundText(material.length_mm, 0) + (number(material.length_mm) ? " мм" : "") +
       "; масса " + roundText(material.weight_g, 1) + (number(material.weight_g) ? " г" : "") + "."];
   }
-  function problem(error, rejected) {
+  function problem(error, rejected, fallbackTitle) {
     error = error || {};
-    var code = error.code || "", title = "Не удалось выполнить инструмент", next = "Проверьте результат и состояние в STE Slicer. Не повторяйте изменение автоматически.";
+    var code = error.code || "", title = fallbackTitle || "Не удалось выполнить инструмент", next = "Проверьте результат и состояние в STE Slicer. Не повторяйте изменение автоматически.";
     var networkTimeout = code === "network_timeout" || /[сС]етевой (timeout|бюджет)/.test(error.message || "");
     if (rejected) { title = "Отклонено до запуска"; next = "Настройка/сцена этим вызовом не менялись: API слайсера не вызывался. Ожидаемые поля и типы — в технических деталях."; }
     else if (error.stage === "preflight" && error.operation_started === false) {
@@ -367,7 +368,7 @@
   }
   function paragraphs(parent, lines) { lines.forEach(function (line) { if (line) parent.appendChild(element("p", line)); }); }
   function errorMessage(text) {
-    var div = element("div", undefined, "msg error"), info = problem({message: text});
+    var div = element("div", undefined, "msg error"), info = problem({message: text}, false, "Требуется внимание");
     div.appendChild(element("strong", info.title)); paragraphs(div, info.lines); technical(div, {message: text}); elMessages.appendChild(div);
   }
   function renderMessage(message) {
@@ -376,7 +377,7 @@
     var div = document.createElement("div");
     div.className = "msg " + (message.is_error ? "error" : message.role);
     if (message.is_error) {
-      var info = problem({message: message.text}); div.appendChild(element("strong", info.title)); paragraphs(div, info.lines);
+      var info = problem({message: message.text}, false, "Запрос не завершён"); div.appendChild(element("strong", info.title)); paragraphs(div, info.lines);
       technical(div, {message: message.text, message_id: message.message_id});
     } else if (message.role === "assistant") markdown(div, message.text);
     else div.textContent = message.text;
@@ -436,7 +437,8 @@
     if ((name === "export_gcode" || name === "save_project_3mf" || name === "get_export_status") && data.export_id && data.state) return [
       "Экспорт: " + stateText(data.state) + ". " + progressText(data.progress), "ID: " + data.export_id,
       data.state === "completed" && !data.valid ? "Результат устарел / актуальность не подтверждена." :
-      data.state === "completed" && data.artifact ? "Подтверждён файл: " + valueText(data.artifact.file_name) : "Готовый файл пока не подтверждён.", data.error && data.error.message];
+      data.state === "completed" && data.artifact ? "Подтверждён файл: " + valueText(data.artifact.file_name) : "Готовый файл пока не подтверждён.", data.error && data.error.message]
+      .concat(Array.isArray(data.warnings) ? data.warnings : []);
     if (name === "set_print_mode" && typeof data.after === "string") return ["Режим: " + modeText(data.after)];
     if (name === "select_profile" && data.after && typeof data.after.quality_type === "string") return ["Профиль качества: " + data.after.quality_type];
     if (name === "select_material" && data.after && data.after.material_id) return ["Материал экструдера " + valueText(data.extruder_id) + ": " + valueText(data.after.material_id)];
@@ -481,7 +483,7 @@
     var failedState = result.data && result.data.state === "failed";
     var unsettled = result.data && (result.data.state && (result.data.state !== "completed" || result.data.valid !== true) ||
       result.data.backend && result.data.backend.matches_mode === false);
-    item.card.className = "tool-card " + (finished && (result.ok === false || failedState) ? "fail" : lines && !unsettled ? "ok" : "neutral");
+    item.card.className = "tool-card " + (!finished ? "running" : result.ok === false || failedState ? "fail" : lines && !unsettled ? "ok" : "neutral");
     item.head.textContent = (labelFrom(toolNames, data.name) || "Инструмент") + (finished ? "" : " — выполняется");
     clear(item.body);
     while (item.card.children.length > 2) item.card.removeChild(item.card.children[2]);
@@ -505,6 +507,12 @@
     }
     technical(item.card, {tool: data.name, arguments: item.started ? item.arguments : "Не опубликованы", result: finished ? result : "Ожидается"});
   }
+  function progressBar(target, value) {
+    if (!value || !number(value.progress) || value.state === "completed" || value.state === "failed") return;
+    var bar = element("progress");
+    bar.max = 1; bar.value = Math.max(0, Math.min(1, value.progress));
+    target.appendChild(bar);
+  }
   function renderSlice(slice) {
     var target = document.getElementById("slice-state");
     clear(target);
@@ -512,6 +520,7 @@
     paragraphs(target, ["Нарезка: " + stateText(slice.state), progressText(slice.progress),
       slice.state === "completed" ? slice.valid ? "Актуально на момент чтения." : "УСТАРЕЛ / актуальность не подтверждена." : null,
       slice.error ? slice.error.message : null]);
+    progressBar(target, slice);
     if (slice.result) paragraphs(target, slice.result.source === "ste_slicer" ? estimates(slice.result) : ["Источник результата не подтверждён."]);
     observationWarning(target, slice.observation);
     technical(target, {snapshot: slice, observation: observationText(slice.observation)});
@@ -533,6 +542,7 @@
     paragraphs(target, ["Экспорт " + (value.kind === "project" ? "проекта 3MF" : value.kind === "gcode" ? "G-code" : "файла") + ": " + stateText(value.state),
       progressText(value.progress), value.state === "completed" && !value.valid ? "УСТАРЕЛ / актуальность не подтверждена." : null,
       value.error ? value.error.message : null]);
+    progressBar(target, value);
     observationWarning(target, value.observation);
     technical(target, {snapshot: value, observation: observationText(value.observation)});
   }
@@ -635,8 +645,9 @@
       if (pending && pending.process_id && processId && pending.process_id !== processId) {
         expiredPending = true; pending = null; dropSelected(); save("ste_ai_pending", null);
       }
-      document.getElementById("status-badge").textContent = status.llm.configured ?
-        "LLM настроена; связь не проверена" : "Нужны настройки LLM";
+      var badge = document.getElementById("status-badge");
+      badge.textContent = status.llm.configured ? "LLM настроена; связь не проверена" : "Нужны настройки LLM";
+      badge.className = "badge " + (status.llm.configured ? "ok" : "warn");
       document.getElementById("cfg-state").textContent = status.llm.has_key ? "Ключ сохранён в Preferences." : "Ключ не подтверждён.";
       document.getElementById("st-printer").textContent = status.slicer.machine_name || "STE недоступен / машина не выбрана";
       document.getElementById("st-mode").textContent = status.slicer.printing_mode ? modeText(status.slicer.printing_mode) : "—";
