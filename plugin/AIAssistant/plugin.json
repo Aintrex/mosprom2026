@@ -1,7 +1,9 @@
 {
   "name": "AI Assistant",
   "author": "Hackathon Team",
-  "version": "0.1.0",
+  "version": "0.1.1",
+  "release_id": "numeric-diag-r1",
+  "numeric_argument_policy": "strict-json-numeric-v1",
   "description": "Scaffold for an LLM print assistant for STE Slicer",
   "api": 5,
   "i18n-catalog": "steslicer"

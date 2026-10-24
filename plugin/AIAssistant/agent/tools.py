@@ -14,6 +14,19 @@ from ..slicer.transforms import TRANSFORM_FIELDS, validate_transform_arguments
 from ..slicer.arrangement import ARRANGEMENT_FIELDS, validate_arrangement_arguments
 from ..uploads import UploadError
 from ..slicer.custom_profiles import CUSTOM_FIELDS, validate_custom_arguments
+from ..release import NUMERIC_ARGUMENT_POLICY
+
+
+def _json_type(value):
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    return "array" if isinstance(value, list) else "object"
 
 
 class UnknownToolError(Exception):
@@ -152,31 +165,61 @@ class ToolRegistry(object):
         return copy.deepcopy(self._tools)
 
     @staticmethod
-    def llm_arguments(name, arguments):
+    def llm_arguments(name, arguments, diagnostics=None):
         """Explicit LLM-boundary repair; MCP/call/Qt never use this method."""
-        if name != "set_setting" or not isinstance(arguments, dict):
+        if name != "set_setting":
+            return arguments, None
+        def reason(code):
+            if diagnostics is not None:
+                diagnostics.update(policy=NUMERIC_ARGUMENT_POLICY, normalizer_present=True, reason=code)
+        if not isinstance(arguments, dict):
+            reason("invalid_argument_object")
             return arguments, None
         key, value, scope = arguments.get("key"), arguments.get("value"), arguments.get("scope")
         kind = SETTING_TYPES.get(key) if isinstance(key, str) else None
         fields = {"key", "scope", "value"} | ({"extruder_id"} if scope == "extruder" else set())
-        if (kind not in ("float", "int") or not isinstance(value, str) or not 1 <= len(value) <= 64 or
-                scope not in ("global", "extruder") or set(arguments) != fields):
+        if diagnostics is not None:
+            diagnostics.update(value_type=_json_type(value), field_count=len(arguments),
+                missing_fields_count=len(fields - set(arguments)), unexpected_fields_count=len(set(arguments) - fields),
+                extruder_id_present="extruder_id" in arguments)
+            if "extruder_id" in arguments:
+                diagnostics["extruder_id_type"] = _json_type(arguments["extruder_id"])
+        if scope not in ("global", "extruder"):
+            reason("invalid_scope")
+            return arguments, None
+        if set(arguments) != fields:
+            reason("invalid_structure")
+            return arguments, None
+        if kind not in ("float", "int"):
+            reason("unknown_key" if kind is None else "key_not_numeric")
+            return arguments, None
+        if not isinstance(value, str):
+            reason("already_json_number" if _json_type(value) == "number" else "value_not_string")
+            return arguments, None
+        if not 1 <= len(value) <= 64:
+            reason("literal_size_invalid")
             return arguments, None
         pattern = r"\A-?(0|[1-9][0-9]*)\Z" if kind == "int" else r"\A-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?\Z"
         if not re.match(pattern, value):
+            reason("not_json_integer_literal" if kind == "int" else "not_json_number_literal")
             return arguments, None
         try:
             if kind == "int":
                 parsed = int(value)  # No float intermediate or precision loss.
             else:
                 exact, parsed = decimal.Decimal(value), float(value)
-                if (not exact.is_finite() or not finite(parsed) or
-                        not exact.is_zero() and (parsed == 0 or exact.copy_abs() < decimal.Decimal.from_float(sys.float_info.min))):
+                if not exact.is_finite() or not finite(parsed):
+                    reason("non_finite_or_overflow")
+                    return arguments, None
+                if not exact.is_zero() and (parsed == 0 or exact.copy_abs() < decimal.Decimal.from_float(sys.float_info.min)):
+                    reason("underflow")
                     return arguments, None
         except (ValueError, OverflowError, decimal.InvalidOperation):
+            reason("literal_parse_error")
             return arguments, None
         repaired = dict(arguments)
         repaired["value"] = parsed
+        reason("normalized")
         return repaired, {"field": "value", "from_type": "string", "to_type": "integer" if kind == "int" else "number",
                           "reason": "strict_json_integer_literal" if kind == "int" else "strict_json_number_literal",
                           "stage": "llm_boundary"}
@@ -187,16 +230,7 @@ class ToolRegistry(object):
         summary = {"format": argument_format}
         if isinstance(arguments, dict) and schema:
             fields = schema.get("properties", {})
-            def kind(value):
-                if value is None:
-                    return "null"
-                if isinstance(value, bool):
-                    return "boolean"
-                if isinstance(value, (int, float)):
-                    return "number"
-                if isinstance(value, str):
-                    return "string"
-                return "array" if isinstance(value, list) else "object"
+            kind = _json_type
             summary["field_types"] = {key: kind(arguments[key]) for key in fields if key in arguments}
             summary["missing_fields"] = [key for key in schema.get("required", []) if key not in arguments]
             summary["unknown_fields_count"] = len(set(arguments) - set(fields))

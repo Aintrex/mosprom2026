@@ -18,6 +18,10 @@ body {
   gap: 14px;
 }
 .brand { display: flex; justify-content: space-between; align-items: center; }
+.sidebar { overflow: hidden; }
+.sidebar-content { display: flex; flex-direction: column; gap: 14px; flex: 1; min-height: 0; min-width: 0; overflow-y: auto; }
+.release-note { flex-shrink: 0; margin-top: auto; padding-top: 10px; border-top: 1px solid #475569; color: #94a3b8; font-size: 11px; line-height: 1.45; white-space: pre-line; overflow-wrap: anywhere; }
+.release-note.warn { color: #fde68a; }
 .brand h1 { font-size: 18px; color: #38bdf8; }
 .badge {
   font-size: 12px;

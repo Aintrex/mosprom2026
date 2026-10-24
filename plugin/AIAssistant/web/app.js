@@ -1,5 +1,7 @@
 // Temporary client adapted from artem_backend b9c0190; API_CONTRACT routes.
 (function () {
+  // Compatibility marker for these static files, not a Git/process identifier.
+  var UI_RELEASE = "numeric-diag-r1", UI_NUMERIC_POLICY = "strict-json-numeric-v1";
   var sessionId = null, after = 0, pending = null, polling = false, generation = 0;
   var globalBusy = false, sessionBusy = false, cards = {}, messages = {}, failures = 0;
   var elMessages = document.getElementById("messages"), elInput = document.getElementById("chat-input");
@@ -519,6 +521,19 @@
   }
   function loadStatus() {
     return api("/api/status").then(function (status) {
+      var version = document.getElementById("plugin-version"), release = status.plugin;
+      if (version) {
+        version.className = "release-note warn";
+        if (!release || typeof release.version !== "string" || typeof release.release_id !== "string") {
+          version.textContent = "Версия сервера не определена — обновите плагин и перезапустите STE Slicer";
+        } else if (release.release_id !== UI_RELEASE || release.numeric_argument_policy !== UI_NUMERIC_POLICY) {
+          version.textContent = "Несовпадение выпусков: интерфейс " + UI_RELEASE + "; сервер " + release.version + " / " + release.release_id +
+            ". Обновите плагин целиком, перезапустите STE Slicer и откройте новый адрес через меню.";
+        } else {
+          version.className = "release-note";
+          version.textContent = "AI Assistant " + release.version + " · " + release.release_id + "\nЧисловой разбор: " + release.numeric_argument_policy;
+        }
+      }
       var restarted = processId && status.process_id && processId !== status.process_id;
       globalBusy = status.agent_state === "processing";
       operationBusy = !!status.operation_busy;

@@ -359,6 +359,13 @@ Preflight сохраняет slice_not_found/slice_not_ready/slice_result_stale;
 
 ### GET /api/status
 
+Поле `plugin` содержит только публичные сведения из установленного `plugin.json`:
+`{"version":"0.1.1","release_id":"numeric-diag-r1","numeric_argument_policy":"strict-json-numeric-v1"}`.
+Backend читает их при загрузке модуля; номер не зависит от Git, времени или `process_id`.
+SPA сравнивает release/policy со своими фиксированными маркерами совместимости и показывает версию внизу левой панели. Отсутствующее поле старого backend даёт предупреждение «Версия сервера не определена — обновите плагин и перезапустите STE Slicer», несовпадение — явное предупреждение с обоими выпусками. Метка подтверждает выпуск обслуживающего сервера, но не успешную запись настройки в STE.
+
+В результатах агентного `set_setting` добавлено `argument_diagnostics`: `normalizer_present`, `policy`, фиксированный `reason`, а для разобранного объекта — `value_type`, `field_count`, `missing_fields_count`, `unexpected_fields_count`, `extruder_id_present` и при наличии `extruder_id_type`. Значения и произвольные имена полей не включаются. Коды: `invalid_argument_object`, `invalid_scope`, `invalid_structure`, `unknown_key`, `key_not_numeric`, `already_json_number`, `value_not_string`, `literal_size_invalid`, `not_json_integer_literal`, `not_json_number_literal`, `non_finite_or_overflow`, `underflow`, `literal_parse_error`, `normalized`. Это причина решения на границе LLM, а не результат native validation/write. Прежние `argument_admission`, validators и строгий прямой MCP сохранены. В частности, global с лишним `extruder_id:null` отвергается целиком; поле не удаляется ради нормализации. Отсутствие диагностики у старого выпуска само по себе не устанавливает причину пользовательской ошибки.
+
 Форма ответа; значения машины здесь иллюстративны:
 
 ```json

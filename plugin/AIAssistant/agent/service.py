@@ -16,6 +16,7 @@ from .tools import ToolRegistry, UnknownToolError
 from .chat_store import ChatStore, HistoryError, MAX_CHATS, MAX_MESSAGES, clean_text
 from ..uploads import FileStore, UploadError, TYPES, MODEL_BYTES, IMAGE_BYTES
 from ..downloads import DownloadRegistry, DownloadError, PUBLIC_FIELDS
+from ..release import public_release
 
 LOGGER = logging.getLogger(__name__)
 MAX_LLM_STEPS, MAX_TOOL_CALLS = 8, 16
@@ -171,6 +172,7 @@ class AgentService(object):
         with self._lock:
             busy = self._active_turn is not None
         return {"api_version": 1, "process_id": self._process_id,
+                "plugin": public_release(),
                 "operation_busy": any(record is not None for record in self._operations.values()),
                 "mode": "plugin" if self._adapter._bridge is not None else "dev",
                 "capabilities": {"chat": True, "events": True, "attachments": True, "downloads": self._adapter._bridge is not None,
@@ -545,6 +547,7 @@ class AgentService(object):
                     executed = False
                     receipt = None
                     admission = {}
+                    argument_diagnostics = {}
                     if stopped:
                         result = outcome_error("tool_not_executed", "Запрос уже остановлен; инструмент не выполнялся")
                     else:
@@ -553,7 +556,7 @@ class AgentService(object):
                             if count >= MAX_TOOL_CALLS:
                                 raise LLMError("tool_limit", "Достигнут лимит 16 инструментов")
                             count += 1
-                            args = self._validated_arguments(name, raw, readonly, admission)
+                            args = self._validated_arguments(name, raw, readonly, admission, argument_diagnostics)
                             if needs_refresh and self.tools.is_mutating(name) and not {"get_slicer_state", "list_models"}.issubset(refreshed):
                                 rejected = outcome_error("history_refresh_required", "После восстановления перед изменением нужны успешные get_slicer_state и list_models в этом ходе; вызов не исполнен")
                                 rejected["error"].update(stage="preflight", executed=False)
@@ -599,6 +602,8 @@ class AgentService(object):
                     if admission:
                         normalized = True
                         result = dict(result, argument_admission=admission)
+                    if argument_diagnostics:
+                        result = dict(result, argument_diagnostics=argument_diagnostics)
                     result = safe_data(result, cfg["api_key"])
                     block.append({"role": "tool", "tool_call_id": call["id"],
                                   "content": json.dumps(result, ensure_ascii=False, allow_nan=False)})
@@ -632,17 +637,18 @@ class AgentService(object):
             block.append({"role": "assistant", "content": sanitize_secret(message, cfg["api_key"])})
             self._finish(session_id, token, block, message, code, cfg["api_key"])
 
-    def _validated_arguments(self, name, raw, readonly, admission=None):
+    def _validated_arguments(self, name, raw, readonly, admission=None, diagnostics=None):
         try:
             arguments = json_arguments(raw)
         except ValueError:
+            self.tools.llm_arguments(name, None, diagnostics)
             raise ToolArgumentsError(self.tools.argument_rejection(name, None,
                 "Нужен корректный ограниченный JSON-объект аргументов с конечными числами; строка/массив/null не подходят",
                 "invalid_json_object"))
         try:
             if name in EXCLUDED or readonly and self.tools.is_mutating(name):
                 raise UnknownToolError(name)
-            arguments, normalization = self.tools.llm_arguments(name, arguments)
+            arguments, normalization = self.tools.llm_arguments(name, arguments, diagnostics)
             if normalization is not None and admission is not None:
                 admission.update(normalization)
             self.tools.validate(name, arguments)

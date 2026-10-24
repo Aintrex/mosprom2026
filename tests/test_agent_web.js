@@ -625,6 +625,23 @@ async function main() {
   assert.match(visibleText(stagedApp.elements.messages.children[0]), /защиты не отключаются автоматически/);
   assert.match(visibleText(stagedApp.elements.messages.children[1]), /Вызов штатной операции уже начат/);
   assert.equal(nodes(stagedApp.elements.messages, "button").length, 0);
-  console.log("Agent web contract: 32 scenarios OK (30 preserved + numeric admission and transform stages; offline DOM).");
+  const release = {version: "0.1.1", release_id: "numeric-diag-r1", numeric_argument_policy: "strict-json-numeric-v1"};
+  const releaseApp = harness(path => ({code: 200, body: path === "/api/status" ? Object.assign({}, status, {plugin: release}) : idle()}));
+  await settle();
+  assert.match(releaseApp.elements["plugin-version"].textContent, /0\.1\.1 · numeric-diag-r1/);
+  assert.match(releaseApp.elements["plugin-version"].textContent, /strict-json-numeric-v1/);
+  assert(!releaseApp.elements["plugin-version"].textContent.includes("исправлено"));
+  assert(!releaseApp.elements["plugin-version"].className.includes("warn"));
+  assert.match(app.elements["plugin-version"].textContent, /Версия сервера не определена — обновите плагин и перезапустите STE Slicer/);
+  assert.match(app.elements["plugin-version"].className, /warn/);
+  const mismatchVersion = harness(path => ({code: 200, body: path === "/api/status" ? Object.assign({}, status, {plugin: Object.assign({}, release, {release_id: "older-release"})}) : idle()}));
+  await settle();
+  assert.match(mismatchVersion.elements["plugin-version"].textContent, /Несовпадение выпусков/);
+  assert.match(mismatchVersion.elements["plugin-version"].textContent, /older-release/);
+  const mismatchPolicy = harness(path => ({code: 200, body: path === "/api/status" ? Object.assign({}, status, {plugin: Object.assign({}, release, {numeric_argument_policy: "unsupported"})}) : idle()}));
+  await settle();
+  assert.match(mismatchPolicy.elements["plugin-version"].textContent, /Несовпадение выпусков/);
+  assert(!releaseApp.requests.some(r => r.options && r.options.method === "POST"));
+  console.log("Agent web contract: 36 scenarios OK (32 preserved + release/legacy/mismatch markers; offline DOM).");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
