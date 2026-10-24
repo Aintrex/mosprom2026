@@ -1,6 +1,7 @@
 import threading
 import webbrowser
 import logging
+import os
 
 from UM.Extension import Extension
 
@@ -22,7 +23,13 @@ class AIAssistant(Extension):
             self._config.load()
         except Exception as exc:
             logging.getLogger(__name__).error("LLM Preferences load: %s", type(exc).__name__)
-        self._service = AgentService(self._adapter, config_provider=self._config.snapshot)
+        chat_directory = None
+        try:
+            from UM.Resources import Resources
+            chat_directory = os.path.join(Resources.getDataStoragePath(), "ai_assistant", "chats")
+        except Exception as exc:
+            logging.getLogger(__name__).error("Chat archive path: %s", type(exc).__name__)
+        self._service = AgentService(self._adapter, config_provider=self._config.snapshot, chat_directory=chat_directory)
         self._closed = False
         self.setMenuName("AI Assistant")
         self.addMenuItem("Open chat", self.showChat)

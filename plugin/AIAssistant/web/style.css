@@ -125,3 +125,73 @@ input, textarea {
 .chat-input-bar textarea { flex: 1; resize: none; }
 .attachment-bar { padding: 10px 20px; background: #1e293b; font-size: 13px; }
 .attachment-bar button { margin-left: 10px; }
+
+/* Keep untrusted long text inside its card; technical code scrolls locally. */
+.chat-history summary { cursor: pointer; font-weight: bold; }
+#chat-list { max-height: 210px; overflow-y: auto; margin: 8px 0; }
+.history-entry { display: block; width: 100%; text-align: left; min-width: 0; white-space: normal; overflow-wrap: anywhere; padding: 8px; background: #0f172a; color: #e2e8f0; border: 1px solid #475569; border-radius: 4px; }
+.history-entry + .history-entry { margin-top: 5px; }
+.history-entry.current { border-color: #38bdf8; background: #172d44; }
+.history-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.history-actions .btn { flex: 1; min-width: 0; }
+#chat-title, #history-status, #save-state { overflow-wrap: anywhere; }
+select:focus-visible { outline: 2px solid #7dd3fc; outline-offset: 3px; }
+.msg.note { align-self: flex-start; background: #172033; color: #cbd5e1; border-left: 2px solid #94a3b8; }
+.layout, .chat-panel, .messages, .sidebar, .card, .chat-header > div { min-width: 0; }
+.chat-panel, .messages { min-height: 0; }
+.sidebar { flex-shrink: 0; width: 300px; }
+.brand { gap: 10px; flex-wrap: wrap; }
+.brand .badge { white-space: normal; }
+.card, .kv, .chat-header, .attachment-bar { overflow-wrap: anywhere; }
+.kv { gap: 10px; }
+.kv strong { text-align: right; min-width: 0; }
+.chat-header { gap: 12px; }
+.chat-header .sub { display: block; margin: 5px 0 0; }
+.chat-header .btn { flex-shrink: 0; }
+.msg, .tool-card { width: fit-content; max-width: min(92%, 920px); overflow-wrap: anywhere; }
+.msg.assistant, .msg.error { white-space: normal; }
+.msg.user { white-space: pre-wrap; }
+.msg p + p, .tool-body p + p { margin-top: 8px; }
+.msg ul, .msg ol { padding-left: 24px; margin: 8px 0; }
+.msg li + li { margin-top: 4px; }
+.msg strong { color: #f8fafc; }
+.msg a, .attachment-bar a { color: #7dd3fc; text-decoration: underline; }
+.msg code { font-family: Consolas, monospace; font-size: 0.93em; background: #0f172a; padding: 2px 4px; border-radius: 3px; }
+.msg pre { margin: 10px 0; max-width: 100%; overflow: auto; white-space: pre; background: #0b1220; border-radius: 6px; padding: 10px; }
+.msg pre code { padding: 0; background: transparent; }
+.tool-card { width: 100%; font-family: inherit; font-size: 14px; padding: 12px 14px; }
+.tool-head { display: block; line-height: 1.45; color: #f1f5f9; }
+.tool-body { color: #cbd5e1; white-space: normal; word-break: normal; line-height: 1.55; }
+.tool-card.neutral { border-left-color: #94a3b8; }
+.technical-details { margin-top: 10px; padding-top: 8px; border-top: 1px solid #334155; }
+.technical-details summary { cursor: pointer; color: #94a3b8; font-size: 12px; width: fit-content; }
+.observation-warning { color: #fde68a; border-left: 2px solid #fbbf24; padding-left: 8px; margin-top: 8px; }
+#slice-state p + p, #export-state p + p { margin-top: 6px; }
+.technical-details pre { font: 12px/1.5 Consolas, monospace; white-space: pre; overflow: auto; max-height: 280px; max-width: 100%; padding: 10px; margin: 8px 0 0; color: #cbd5e1; background: #0b1220; }
+.attachment-name { font-size: 12px; color: #cbd5e1; margin-top: 8px; }
+.attachment-bar, .attachment-bar > div, .attachment-bar label { min-width: 0; }
+#artifacts { max-height: 20vh; overflow: auto; }
+#artifacts:empty { display: none; }
+#artifacts > div + div { margin-top: 8px; }
+input[type="file"] { width: 100%; min-width: 0; max-width: 100%; }
+.chat-input-bar textarea { min-width: 0; }
+button:focus-visible, a:focus-visible, summary:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid #7dd3fc; outline-offset: 3px; }
+@media (max-width: 1100px) {
+  .sidebar { width: 270px; padding: 12px; }
+  .messages { padding: 14px; }
+  .msg, .tool-card { max-width: 100%; }
+}
+@media (max-width: 760px) {
+  body { height: auto; min-height: 100vh; overflow: auto; }
+  .layout { flex-direction: column; height: auto; min-height: 100vh; }
+  .sidebar { width: 100%; max-height: 32vh; border-right: 0; border-bottom: 1px solid #334155; }
+  .chat-panel { flex: none; height: 76vh; min-height: 440px; }
+  .chat-header { padding: 12px; align-items: flex-start; }
+  .chat-header strong { font-size: 14px; }
+  .chat-header .btn { padding: 7px 9px; font-size: 12px; }
+  .messages { padding: 12px; }
+  .msg, .tool-card { max-width: 100%; padding: 10px 12px; }
+  .attachment-bar, .chat-input-bar { padding: 10px 12px; }
+  .chat-input-bar { gap: 8px; }
+  .chat-input-bar .btn { padding: 8px; }
+}

@@ -144,7 +144,7 @@ class PrintSettingsTests(unittest.TestCase):
         self.assert_error(self.adapter.get_setting("speed_print", "extruder", "UI label 1"), "extruder_not_found")
 
     def test_describe_has_actual_metadata_unavailable_keys_and_no_changes(self):
-        result = self.adapter.describe_settings("extruder", "0")
+        result = self.adapter.describe_settings("extruder", "0", keys=["material_print_temperature", "layer_height", "line_width", "infill_pattern", "infill_sparse_density"])
         self.assertTrue(result["ok"], result)
         items = {item["key"]: item for item in result["data"]["settings"]}
         self.assertEqual(items["material_print_temperature"]["unit"], "°C")
@@ -186,7 +186,7 @@ class PrintSettingsTests(unittest.TestCase):
     def test_missing_metadata_null_and_writes_refused_without_invented_defaults(self):
         props = self.app.stack.props["speed_print"]
         props.update(type="str", value="arbitrary text")
-        items = self.adapter.describe_settings("global")["data"]["settings"]
+        items = self.adapter.describe_settings("global", keys=["speed_print"])["data"]["settings"]
         item = next(item for item in items if item["key"] == "speed_print")
         self.assertEqual(item["type"], "str")
         self.assertIsNone(item["value"])

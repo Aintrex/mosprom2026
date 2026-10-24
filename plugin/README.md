@@ -505,9 +505,9 @@ Invoke-ExportTool 'get_setting' @{key='layer_height'; scope='global'} | ConvertT
 
 ## ТЗ 07: настройки global и явно выбранного экструдера
 
-get/set_setting теперь поддерживают 19 ключей: layer_height, layer_height_0, line_width, wall_line_count, top_bottom_thickness, infill_sparse_density, infill_pattern, support_enable, support_type, support_angle, material_print_temperature, material_bed_temperature, speed_print, retraction_enable, retraction_amount, retraction_speed, cool_fan_enabled, cool_fan_speed, adhesion_type. Режим, машина/сопло, start/end G-code и произвольные ключи сюда не входят. Batch setter отсутствует.
+ТЗ07 исходно открыло 19 ключей: layer_height, layer_height_0, line_width, wall_line_count, top_bottom_thickness, infill_sparse_density, infill_pattern, support_enable, support_type, support_angle, material_print_temperature, material_bed_temperature, speed_print, retraction_enable, retraction_amount, retraction_speed, cool_fan_enabled, cool_fan_speed, adhesion_type. ТЗ13 сохраняет их и расширяет каталог до120 (см. отдельный раздел ниже). Режим, машина/сопло, start/end G-code и произвольные ключи сюда не входят. Batch setter отсутствует.
 
-Обязательны key/scope, для set ещё value. При `scope=extruder` обязателен строковый extruder_id из runtime-позиций, например `"0"`; при global extruder_id запрещён. UI-экструдер не меняется и не подставляется. `describe_settings {scope,extruder_id?}` возвращает allowlist с actual type/value/unit/options, enabled, разрешениями записи и hard/warning bounds. Отсутствующие/невычисленные поля — null/limitations, а не собственные defaults. Разрешение записи зависит от фактической машины/стека; наличие ключа в allowlist не обещает поддержку.
+Обязательны key/scope, для set ещё value. При `scope=extruder` обязателен строковый extruder_id из runtime-позиций, например `"0"`; при global extruder_id запрещён. UI-экструдер не меняется и не подставляется. `describe_settings {scope,extruder_id?,keys?,category?,query?,offset?,limit?}` возвращает страницу каталога с actual type/value/unit/options, enabled, разрешениями записи и hard/warning bounds. Без фильтров теперь выдаются первые20 параметров, не полный список; для известного ключа используйте keys. Отсутствующие/невычисленные поля — null/limitations, а не собственные defaults. Разрешение записи зависит от фактической машины/стека; наличие ключа в каталоге не обещает поддержку.
 
 Числа конечные, bool не является числом; int не округляется, числовые строки не принимаются. Bool — только JSON boolean, enum — ключ текущих options, не подпись. Layer_height сохраняет >0, для остальных действуют runtime hard bounds (нулевое заполнение может допускаться). Выход за warning bounds разрешён с warnings. Неизвестные тип/permissions/enabled/readonly и невычисленные hard bounds запрещают запись.
 
@@ -537,9 +537,9 @@ $printState = Invoke-PrintTool 'get_slicer_state' @{}
 $printState | ConvertTo-Json -Depth 25
 if ($null -eq $printState.machine -or $printState.machine.name -ne 'Stereotech Hybrid 530 V5.2.4' -or
     $printState.printing_mode -ne 'classic' -or -not $printState.backend.matches_mode) { throw 'Выберите Stereotech Hybrid 530 V5.2.4 и согласованный classic backend в UI' }
-$printGlobal = Invoke-PrintTool 'describe_settings' @{scope='global'}
-$printExt0 = Invoke-PrintTool 'describe_settings' @{scope='extruder'; extruder_id='0'}
-$printExt1 = Invoke-PrintTool 'describe_settings' @{scope='extruder'; extruder_id='1'}
+$printGlobal = Invoke-PrintTool 'describe_settings' @{scope='global'; keys=@('speed_print')}
+$printExt0 = Invoke-PrintTool 'describe_settings' @{scope='extruder'; extruder_id='0'; keys=@('material_print_temperature')}
+$printExt1 = Invoke-PrintTool 'describe_settings' @{scope='extruder'; extruder_id='1'; keys=@('material_print_temperature')}
 foreach ($description in @($printGlobal, $printExt0, $printExt1)) {
     $description.settings | Format-Table key, type, value, unit, available, enabled, settable
 }
@@ -601,6 +601,135 @@ if ($printRestoredGlobal.value -ne $printOriginalGlobal.value -or $printRestored
 ```
 
 Сохраните реальные ответы и скриншоты до/после/восстановления для ведущего. Не объявляйте этот сценарий пройденным по тестам с подменами. Старую нарезку после изменения/восстановления повторно актуальной не считать; нужен новый явный start.
+
+## ТЗ 13: расширенный каталог параметров
+
+Каталог расширен с19 до **120 ключей в10 группах**, включая прежние19. Полный список/типы — `docs/tasks/TASK_13_SETTINGS_CATALOG.md`, контракт — `docs/API_CONTRACT.md`. Это перечень разрешённых запросов; доступность/тип/enabled/права записи подтверждаются API текущей машины/профиля/режима/экструдера. Машинные параметры, G-code/CLI, `printing_mode` и batch-запись не открыты; `cylindrical_round_segments` — float.
+
+`describe_settings` принимает scope и необязательные `keys` (1–20 уникальных), `category`, `query` (до80 символов), `offset` (целое>=0), `limit` (1–30, default20). Категории: resolution/shell/infill/material/speed/travel/cooling/support/platform_adhesion/printing_mode_category. Фильтры пересекаются, выдача в порядке каталога; query ищет подстроку без регистра по key/исходному английскому краткому названию. Отсутствие query не фильтрует, пустая/пробельная query возвращает0. Все аргументы/машина/экструдер проверяются даже для пустой страницы.
+
+Ответ сохраняет scope/settings/extruder_id и добавляет total/offset/limit/returned/next_offset/truncated. По умолчанию только20 метаданных, максимум30; API не читает все120 ради страницы. Next_offset=null в конце, truncated означает оставшиеся страницы. Label/description берутся из Definition API (до200/500 символов, отдельные флаги усечения), fallback label/category из каталога; text_source отличает статический текст от API. Нет описания — null, собственных defaults нет. Options берутся целиком из runtime, без отдельной квоты размера.
+
+Прежние строгие get/set, before/after, Qt/userChanges, guards и stale slice/export сохранены. LLM получает инструкцию адресного поиска, UI — количество найденных/выданных и notice следующей страницы; JSONdetails остаются закрытыми. **Проверки с подменами не подтверждают доступность всех120 в STE.** Итоги/размеры ответов — `docs/reports/TASK_13_REPORT.md`; новая копия не установлена, native-приёмка открыта.
+
+### PowerShell для приёмки ТЗ 13
+
+Команды подготовлены, **не выполнялись**. После согласованного обновления целой копии сохраните проект, выберите Hybrid530V5.2.4/classic, дождитесь завершения native-операций и выключите auto-slice вручную. При любой ошибке setter остановитесь, перечитайте значение/UI: не повторяйте неизвестно исполненную запись и не делайте автоматический откат. Ниже восстановление — отдельный явный шаг после подтверждённого результата. Восстановление значения не удаляет override и не возвращает старой нарезке valid. Реальные ответы/скриншоты сохраните для ведущего; это не команды нагрева/печати.
+
+```powershell
+$extendedPort = [int](Read-Host 'Текущий порт из адреса чата')
+$extendedUrl = 'http://127.0.0.1:{0}/mcp' -f $extendedPort
+function Invoke-ExtendedTool($name, $arguments) {
+    $body = @{jsonrpc='2.0'; id=13; method='tools/call'; params=@{name=$name; arguments=$arguments}} | ConvertTo-Json -Depth 25 -Compress
+    $rpc = Invoke-RestMethod -Uri $extendedUrl -Method Post -ContentType 'application/json' -TimeoutSec 15 -Body $body
+    if ($null -ne $rpc.error) { throw ($rpc.error | ConvertTo-Json -Compress) }
+    $envelope = $rpc.result.content[0].text | ConvertFrom-Json
+    if ($rpc.result.isError -or -not $envelope.ok) { throw ($envelope | ConvertTo-Json -Depth 25 -Compress) }
+    $envelope.data
+}
+function Get-ExtendedWritable($key, $scope, $extruderId) {
+    $arguments = @{scope=$scope; keys=@($key)}
+    if ($scope -eq 'extruder') { $arguments.extruder_id = $extruderId }
+    $page = Invoke-ExtendedTool 'describe_settings' $arguments
+    $meta = @($page.settings)[0]
+    if ($null -eq $meta -or -not $meta.available -or -not $meta.enabled -or -not $meta.settable -or $meta.read_only -ne $false) {
+        throw 'API не подтвердило возможность записи: прочитайте limitations/UI, зависимости не включаются автоматически'
+    }
+    $meta
+}
+$extendedState = Invoke-ExtendedTool 'get_slicer_state' @{}
+$extendedState | ConvertTo-Json -Depth 25
+if ($extendedState.machine.name -ne 'Stereotech Hybrid 530 V5.2.4' -or $extendedState.printing_mode -ne 'classic' -or -not $extendedState.backend.matches_mode) { throw 'Сначала выберите Hybrid530/classic в UI' }
+$extendedPage = Invoke-ExtendedTool 'describe_settings' @{scope='global'; category='support'; query='pattern'; limit=1}
+$extendedPage | ConvertTo-Json -Depth 25
+if ($null -ne $extendedPage.next_offset) {
+    Invoke-ExtendedTool 'describe_settings' @{scope='global'; category='support'; query='pattern'; offset=$extendedPage.next_offset; limit=1} | ConvertTo-Json -Depth 25
+}
+Invoke-ExtendedTool 'describe_settings' @{scope='global'; keys=@('support_z_distance','support_xy_distance','brim_width','raft_surface_layers')} | ConvertTo-Json -Depth 25
+Invoke-ExtendedTool 'describe_settings' @{scope='global'; query=''} | ConvertTo-Json -Depth 25
+```
+
+Новый scalar speed_wall: сначала метаданные/текущее значение, затем другое допустимое число в runtime unit. Если runtime не подтвердил float, пункт остаётся непроверенным.
+
+```powershell
+$extendedScalarMeta = Get-ExtendedWritable 'speed_wall' 'global' $null
+if ($extendedScalarMeta.type -ne 'float') { throw 'Не подтверждён float' }
+$extendedScalarMeta | ConvertTo-Json -Depth 25
+$extendedScalarBefore = Invoke-ExtendedTool 'get_setting' @{key='speed_wall'; scope='global'}
+$extendedScalarNew = [double]::Parse((Read-Host 'Другая допустимая speed_wall, с точкой'), [Globalization.CultureInfo]::InvariantCulture)
+if ($extendedScalarNew -eq $extendedScalarBefore.value) { throw 'Нужно другое допустимое значение' }
+Invoke-ExtendedTool 'set_setting' @{key='speed_wall'; scope='global'; value=$extendedScalarNew} | ConvertTo-Json -Depth 25
+Invoke-ExtendedTool 'get_setting' @{key='speed_wall'; scope='global'} | ConvertTo-Json -Depth 25
+```
+
+После сверки readback/UI явно восстановите:
+
+```powershell
+Invoke-ExtendedTool 'set_setting' @{key='speed_wall'; scope='global'; value=$extendedScalarBefore.value} | ConvertTo-Json -Depth 25
+Invoke-ExtendedTool 'get_setting' @{key='speed_wall'; scope='global'} | ConvertTo-Json -Depth 25
+```
+
+Новый enum: используйте **ключ** текущих options, не подпись. После успешного изменения/readback сверьте UI, затем выполните блок восстановления.
+
+```powershell
+$extendedEnumMeta = Get-ExtendedWritable 'retraction_combing' 'global' $null
+if ($extendedEnumMeta.type -ne 'enum') { throw 'Не подтверждён enum' }
+$extendedEnumMeta.options | ConvertTo-Json -Depth 25
+$extendedEnumBefore = Invoke-ExtendedTool 'get_setting' @{key='retraction_combing'; scope='global'}
+$extendedEnumNew = Read-Host 'Другой ключ из runtime options retraction_combing'
+if ($extendedEnumNew -eq $extendedEnumBefore.value -or $extendedEnumNew -notin $extendedEnumMeta.options.PSObject.Properties.Name) { throw 'Нужен другой разрешённый ключ options' }
+Invoke-ExtendedTool 'set_setting' @{key='retraction_combing'; scope='global'; value=$extendedEnumNew} | ConvertTo-Json -Depth 25
+Invoke-ExtendedTool 'get_setting' @{key='retraction_combing'; scope='global'} | ConvertTo-Json -Depth 25
+```
+
+```powershell
+Invoke-ExtendedTool 'set_setting' @{key='retraction_combing'; scope='global'; value=$extendedEnumBefore.value} | ConvertTo-Json -Depth 25
+Invoke-ExtendedTool 'get_setting' @{key='retraction_combing'; scope='global'} | ConvertTo-Json -Depth 25
+```
+
+Температура первого слоя: выберите точную runtime-позицию из диагностики (UI-позиция инструментом не меняется). Сохраните также показания другого экструдера/UI, если он есть; после записи сверьте именно выбранный стек.
+
+```powershell
+$extendedExtruderId = Read-Host 'Точный runtime extruder_id из get_slicer_state'
+$extendedExtMeta = Get-ExtendedWritable 'material_print_temperature_layer_0' 'extruder' $extendedExtruderId
+if ($extendedExtMeta.type -ne 'float') { throw 'Не подтверждён float' }
+$extendedExtMeta | ConvertTo-Json -Depth 25
+$extendedExtBefore = Invoke-ExtendedTool 'get_setting' @{key='material_print_temperature_layer_0'; scope='extruder'; extruder_id=$extendedExtruderId}
+$extendedExtNew = [double]::Parse((Read-Host 'Другая допустимая температура первого слоя, с точкой'), [Globalization.CultureInfo]::InvariantCulture)
+if ($extendedExtNew -eq $extendedExtBefore.value) { throw 'Нужно другое допустимое значение' }
+Invoke-ExtendedTool 'set_setting' @{key='material_print_temperature_layer_0'; scope='extruder'; extruder_id=$extendedExtruderId; value=$extendedExtNew} | ConvertTo-Json -Depth 25
+Invoke-ExtendedTool 'get_setting' @{key='material_print_temperature_layer_0'; scope='extruder'; extruder_id=$extendedExtruderId} | ConvertTo-Json -Depth 25
+```
+
+После подтверждения readback/UI восстановите:
+
+```powershell
+Invoke-ExtendedTool 'set_setting' @{key='material_print_temperature_layer_0'; scope='extruder'; extruder_id=$extendedExtruderId; value=$extendedExtBefore.value} | ConvertTo-Json -Depth 25
+Invoke-ExtendedTool 'get_setting' @{key='material_print_temperature_layer_0'; scope='extruder'; extruder_id=$extendedExtruderId} | ConvertTo-Json -Depth 25
+```
+
+Отдельный пункт5D: только после осознанного ручного перехода в cylindrical/5D Spiral с matching backend, без запущенной нарезки. В classic этот блок не выполняйте. Отключённый параметр не включается автоматически; отметьте ограничение.
+
+```powershell
+$extended5dState = Invoke-ExtendedTool 'get_slicer_state' @{}
+if ($extended5dState.printing_mode -ne 'cylindrical' -or -not $extended5dState.backend.matches_mode) { throw 'Нужен вручную выбранный cylindrical с matching backend' }
+$extended5dMeta = Get-ExtendedWritable 'cylindrical_layer_height' 'global' $null
+if ($extended5dMeta.type -ne 'float') { throw 'Не подтверждён float' }
+$extended5dMeta | ConvertTo-Json -Depth 25
+$extended5dBefore = Invoke-ExtendedTool 'get_setting' @{key='cylindrical_layer_height'; scope='global'}
+$extended5dNew = [double]::Parse((Read-Host 'Другая допустимая cylindrical_layer_height, с точкой'), [Globalization.CultureInfo]::InvariantCulture)
+if ($extended5dNew -eq $extended5dBefore.value) { throw 'Нужно другое допустимое значение' }
+Invoke-ExtendedTool 'set_setting' @{key='cylindrical_layer_height'; scope='global'; value=$extended5dNew} | ConvertTo-Json -Depth 25
+Invoke-ExtendedTool 'get_setting' @{key='cylindrical_layer_height'; scope='global'} | ConvertTo-Json -Depth 25
+```
+
+После сверки API/UI восстановите значение **в том же режиме**, затем вручную верните исходный classic и проверьте backend:
+
+```powershell
+Invoke-ExtendedTool 'set_setting' @{key='cylindrical_layer_height'; scope='global'; value=$extended5dBefore.value} | ConvertTo-Json -Depth 25
+Invoke-ExtendedTool 'get_setting' @{key='cylindrical_layer_height'; scope='global'} | ConvertTo-Json -Depth 25
+Invoke-ExtendedTool 'get_slicer_state' @{} | ConvertTo-Json -Depth 25
+```
 
 ## ТЗ 08: преобразования и удаление моделей с Undo
 
@@ -912,6 +1041,42 @@ Get-Item -LiteralPath $downloadTarget | Select-Object Name,Length
 capabilities.background_slice_events=true только в plugin, в dev=false; это возможность своих наблюдений, не доказательство native-готовности. Принятая копия `tmp/acceptance/baseline_296/AIAssistant`/manifest сохранена (29 хешей совпадают), установленный плагин не обновлялся. Подробности/проверки — [ROLE_02D_REPORT.md](../docs/reports/ROLE_02D_REPORT.md).
 
 Отдельный ручной сценарий новой версии **не выполнялся**: после согласованного обновления/настройки провайдера явно запустить небольшую нарезку агентом, дождаться idle и без нового сообщения проверить изменение прогресса→completed→оценки STE; затем явно запустить writer агентом и дождаться export_progress→artifact_ready/скачивания без следующего LLM-call. Сверить UI/Preview/reopen по прежним командам. Проверить reload/cursor recovery и ошибку наблюдения без автоповтора. Копия296 текущего ручного прогона имеет прежние снимки; её результаты не подтверждают2D. Никаких реальных LLM/engine/принтера этим заданием не запускалось, ТЗ03/04 и native-приёмка остаются открыты.
+
+## Роль2G: сохранённые диалоги
+
+В сворачиваемом блоке **«Диалоги»** показаны названия/даты и текущий разговор. Выбор строки открывает её, «Новый диалог» начинает отдельный контекст, «Удалить» требует подтверждения. Переключение меняет только переписку: сцена STE общая для всех чатов и историей не восстанавливается. Название берётся из первого сообщения, без дополнительного LLM. Длинные названия переносятся, кнопки доступны с клавиатуры; на узком экране блок изначально свёрнут. Markdown/закрытые технические детали, вложения, прогресс и скачивание текущего процесса сохранены.
+
+Архив — локальные JSON в `Resources.getDataStoragePath()/ai_assistant/chats`, вне исходников плагина. Путь берётся через штатный API наQt; диск читает/пишет отдельный worker. До20 диалогов,100 архивных сообщений/кратких итогов,512КиБ на разговор/10МиБ суммарно (включая резерв16КиБ под индекс). При ограничении старой истории виден notice; переполнение/порча/недоступность дают ошибку, файлы не подменяются пустыми. Временно для атомарной замены нужно место ещё под один файл. Просмотр списка не загружает весь архив в контекст модели; посещённые разговоры сохраняют ограниченное прежними лимитами RAM-состояние до закрытия процесса, чтобы не терять его идемпотентность.
+
+Статусы **«Сохранение…»**, **«Сохранено на этом компьютере»**, **«Сохранение не подтверждено»** различаются. Только saved означает подтверждённую запись revision, ни202, ни ответ LLM/idle её не заменяют. При закрытии Qt не ждёт диска: helper внеQt даёт до2с для финальной записи. Обычное закрытие тестового процесса проверено; принудительное завершение ОС/зависший диск могут потерять последнюю неподтверждённую версию. Это не гарантия fsync. Архив рассчитан на один экземпляр STE с этим каталогом; JSON не шифруется.
+
+В архиве только выбранные тексты/безопасные краткие результаты, без Preferences/ключа/headers/rawproviderrequests, байтов/base64/путей и operationalIDs/живых ссылок. Известный ключ удаляется также из user/assistant/title. После рестарта возвращается **текстовая историческая справка**, максимум12 блоков только выбранного разговора; точные прежние tool_calls/results/arguments не сохраняются. Старые file_id/model_id/slice_id/export_id/download_url и ownership не действуют, вложение нужно загрузить снова. Начатый запрос отмечается прерванным, pending/старые tools не повторяются. Смена process_id обнаруживается status/snapshot/polling даже при совпадении курсора; старая вкладка заменяет карточки только GET-чтением. Перед первым новым изменением восстановленного чата агент должен перечитать состояние/модели; теория сама не запускает tools. Проект восстанавливается настоящим3MF отдельно.
+
+Новый/выбор/удаление/отправка в UI блокируются при active/pending/своём наблюдаемом slice/export. Удаление сервером также защищено active ownership, не отменяет engine и не удаляет3MF/G-code. Старый API создания пустого дескриптора при busy сохранён. GETlist/snapshot/events остаются доступны; сервер не вводит глобальный selected-session. В dev по умолчанию только RAM и явный статус «Временный диалог». Само наличие capabilities.saved_dialogs не доказывает успешную запись.
+
+### Ручная приёмка2G — подготовлена, не выполнялась
+
+После отдельного согласованного обновления целой копии и настройки провайдера сохраните проект. В исходниках/подменах эта приёмка не считается пройденной:
+
+1. Откройте «Диалоги», создайте разговор: «Обсудим кронштейн PETG. Пока только объясни влияние заполнения». Дождитесь ответа/idle и **«Сохранено»**. Никаких изменений проекта для этого запроса не требуется.
+2. Создайте второй: «Обсудим декор PLA. Объясни высоту слоя». После сохранения вернитесь в первый, сверьте отдельную историю. Выбор сам не вызывает LLM/инструменты.
+3. Обычным способом закройте и снова откройте STE, затем чат на его **новом текущем порту**. Найдите оба разговора, откройте первый. В нём видны исторические сообщения; старые операции/вложения/ссылки не ожили.
+4. Спросите «Какой материал мы обсуждали в этом разговоре?» — контекст только первого. Для нового изменения потребуются реальные чтения STE; эта история не восстанавливает сцену.
+5. При наличии завершённого upload/экспорта в тестовой истории после рестарта проверьте expired/no active download; новое вложение загружается заново. Не повторяйте старый pending/запуск. Ошибку/квоту проверяйте на отдельном тестовом архиве, не повреждайте рабочие файлы.
+6. Явно удалите второй тестовый разговор с подтверждением. Перезапустите STE и убедитесь, что он не появился снова. Сохраните скриншоты списка/выбора/saved/истории, результаты передайте ведущему. Native/browser-приёмка остаётся открыта до этого сценария.
+
+Чтение списка через PowerShell без LLM/native-команд (подготовлено, не запускалось):
+
+```powershell
+$historyPort = [int](Read-Host 'Текущий порт из адреса чата')
+$historyBase = 'http://127.0.0.1:{0}' -f $historyPort
+$historyList = Invoke-RestMethod -Uri ($historyBase + '/api/sessions') -TimeoutSec 15
+$historyList | ConvertTo-Json -Depth 20
+$historyId = Read-Host 'Непрозрачный session_id из списка для чтения'
+Invoke-RestMethod -Uri ($historyBase + '/api/sessions/' + [Uri]::EscapeDataString($historyId)) -TimeoutSec 15 | ConvertTo-Json -Depth 25
+```
+
+Контракт/ошибки — `docs/API_CONTRACT.md`, проверки/ограничения — `docs/reports/ROLE_02G_REPORT.md`. Установка/реальный провайдер/STE/принтер агентом не выполнялись.
 
 ## Исправление окна LLM Settings
 

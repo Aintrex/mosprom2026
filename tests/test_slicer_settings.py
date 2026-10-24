@@ -44,7 +44,9 @@ class Stack(object):
         self.check_thread()
         if self.failure is not None:
             raise self.failure
-        return self.supported and key == "layer_height"
+        return self.supported and key == "layer_height" and prop in (
+            "value", "minimum_value", "maximum_value", "minimum_value_warning", "maximum_value_warning",
+            "type", "unit", "enabled", "settable_globally", "settable_per_extruder", "options")
 
     def getProperty(self, key, prop):
         self.check_thread()

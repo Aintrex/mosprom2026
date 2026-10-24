@@ -42,7 +42,7 @@
 - `assistant_status`, аргументы `{}`: диагностирует объём реализации; не подтверждает реальный runtime.
 - `get_setting`, аргументы `{"key":"layer_height","scope":"global"}` либо `{"key":"material_print_temperature","scope":"extruder","extruder_id":"0"}`.
 - `set_setting`, те же key/scope/extruder_id и обязательное value; прежний вызов `{"key":"layer_height","scope":"global","value":0.24}` сохранён.
-- `describe_settings`, аргументы `{"scope":"global"}` либо `{"scope":"extruder","extruder_id":"0"}`: allowlist с фактическими значениями/метаданными текущего стека.
+- `describe_settings`, обязательный `scope` (и явный `extruder_id` для extruder), необязательные `keys/category/query/offset/limit`: страница каталога с фактическими значениями/метаданными текущего стека; default20/max30 (ТЗ13).
 - `get_slicer_state`, аргументы `{}`: состояние приложения, активной машины, режима и backend.
 - `set_print_mode`, аргументы `{"mode":"classic"}`: разрешены только `classic`, `cylindrical`, `cylindrical_full`; подтверждает настройку и выбранный backend. Вызывать на пустой сцене, без активной нарезки.
 - `list_quality_profiles`, аргументы `{}`: все встроенные QualityGroup текущей конфигурации, включая недоступные.
@@ -67,7 +67,7 @@
 - `save_project_3mf`, аргументы `{"slice_id":"slice-1"}`: запуск 3MFWriter из workspace-handler, сохранение проекта.
 - `get_export_status`, аргументы `{"export_id":"export-..."}`: статус записи и готовый локальный артефакт.
 
-У новых инструментов лишние поля запрещены. ТЗ 07 расширяет get/set_setting на 19 ключей ниже; передавать `printing_mode` по-прежнему нельзя. ТЗ 02 принято после 45 автоматических проверок и реального прогона в STE Slicer 7.10.12 на Hybrid 530 V5.2.4: диагностика, три режима, backend, UI и восстановление подтверждены. Это не проверка слайсинга, экспорта или новых настроек ТЗ 07.
+У новых инструментов лишние поля запрещены. ТЗ 07 исходно открыло 19 ключей; ТЗ13 расширяет get/set_setting до каталога120 ниже. Передавать `printing_mode` по-прежнему нельзя. ТЗ 02 принято после 45 автоматических проверок и реального прогона в STE Slicer 7.10.12 на Hybrid 530 V5.2.4: диагностика, три режима, backend, UI и восстановление подтверждены. Это не проверка слайсинга, экспорта или новых настроек.
 
 Инструменты ТЗ 03 реализованы и проверены с подменами; их runtime-приёмка ещё не проводилась. ID — непустые строки; `extruder_id` — ключ позиции из `global_stack.extruders` (например, `"0"`), а не подпись кнопки UI и не числовое значение. UI-экструдер ради операций не переключается. Названия не заменяют ID.
 
@@ -105,16 +105,24 @@
 
 У `assistant_status` сейчас отдельный диагностический формат без обёртки `ok/data`. Не считать все ответы MCP одинаковыми. Он перечисляет реализованные инструменты слайсера и allowlist/области настроек, но сохраняет `llm_connected=false` и `runtime_verified=false`; прошлый прогон не подтверждает новый код. В dev-сервере операции с приложением отвечают `slicer_not_connected`. ТЗ 01 принято в STE Slicer 7.10.12 на Hybrid 530 V5.2.4, 3D; чтение, изменение и восстановление layer_height подтверждены API/UI. Это не делает доступными целевые REST-маршруты ниже.
 
-### Настройки ТЗ 07 — реализованы, runtime-приёмка открыта
+### Настройки ТЗ 07/13 — реализованы, runtime-приёмка открыта
 
-| Тип для ранней валидации | Allowlist |
-| --- | --- |
-| float | layer_height, layer_height_0, line_width, top_bottom_thickness, infill_sparse_density, support_angle, material_print_temperature, material_bed_temperature, speed_print, retraction_amount, retraction_speed, cool_fan_speed |
-| int | wall_line_count |
-| bool | support_enable, retraction_enable, cool_fan_enabled |
-| enum | infill_pattern, support_type, adhesion_type |
+Исходные19 сохранены; полный перечень120 ключей/типов и стабильный порядок — [каталог ТЗ13](tasks/TASK_13_SETTINGS_CATALOG.md), единственный runtime-каталог — `slicer/settings_catalog.py`. Категории перечислены в той же схеме MCP/LLM:
 
-Таблица подтверждена definitions форка и ограничивает синтаксис запроса; она не обещает поддержку текущей машиной. Нужны реальное наличие ключа и совпадающий runtime type. Машина/сопло, start/end G-code, printing_mode, произвольные ключи, строки-выражения и batch setter не допускаются. Режим меняется только set_print_mode.
+| category | Группа | Ключей |
+| --- | --- | ---: |
+| resolution | Высоты/ширины линий | 12 |
+| shell | Стенки/поверхности | 11 |
+| infill | Заполнение | 11 |
+| material | Температуры/подача/ретракт | 20 |
+| speed | Скорости | 14 |
+| travel | Перемещения/подъём | 6 |
+| cooling | Охлаждение | 9 |
+| support | Поддержки | 20 |
+| platform_adhesion | Адгезия | 13 |
+| printing_mode_category | Основание5D | 4 |
+
+Каталог подтверждён definitions форка и ограничивает синтаксис запроса; он не обещает поддержку всех120 текущей машиной. Нужны реальное наличие ключа и совпадающий runtime type. `cylindrical_round_segments` имеет тип float; `support_structure` отсутствует. Машина/сопло, start/end G-code, printing_mode, произвольные ключи, строки-выражения и batch setter не допускаются. Режим меняется только set_print_mode.
 
 Schemas get/set: обязательные key/scope и для setter value; key — enum allowlist, scope — global/extruder, extruder_id — необязательная в JSON-schema строка minLength:1, value — number/boolean/string, additionalProperties:false. Общий валидатор требует extruder_id **только** для extruder, запрещает его для global и проверяет тип конкретного ключа. Describe имеет обязательный scope и такое же правило extruder_id. Неверная структура, bool вместо числа, дробный int, NaN/inf, числовая строка и неподдержанный ключ — -32602 до API. Целое 3.0 допускается для int и нормализуется в 3 без округления дроби. Только layer_height сохраняет раннее >0; нулевое заполнение может быть допустимо.
 
@@ -126,7 +134,11 @@ extruder_id — точный строковый ключ global_stack.extruders,
 {"key":"material_print_temperature","scope":"extruder","extruder_id":"0","unit":"°C","before":205.0,"after":210.0}
 ```
 
-Describe data имеет `{scope,extruder_id?,settings:[...]}` ровно для allowlist, включая недоступные ключи. Иллюстративный элемент:
+Describe дополнительно принимает `keys` (массив1–20 уникальных известных ключей), `category` (из таблицы), `query` (строка до80 символов), `offset` (целое>=0, default0), `limit` (целое1–30, default20). Bool не int; null/лишние поля/неизвестные ключи или категория дают -32602 до API. Фильтры пересекаются, затем берётся страница в порядке каталога, а не входного keys. Поиск — подстрока без регистра по key и исходному краткому английскому label каталога, без fuzzy/перевода. Runtime label может быть локализован; он не участвует в поиске, чтобы не читать все120 описаний. Отсутствие query не фильтрует; явная пустая/пробельная query даёт0 результатов. Даже при пустом результате проверяются остальные аргументы, машина и runtime extruder_id.
+
+Describe data сохраняет `{scope,extruder_id?,settings:[...]}` и добавляет `total` (после фильтров до страницы), `offset`, `limit`, `returned`, `next_offset` (null в конце), `truncated` (есть следующая страница). Недоступные ключи выбранной страницы остаются с available=false. Offset за концом даёт пустой settings, returned0/next_offset=null/truncated=false при прежнем total. Вызов только со scope теперь возвращает первую страницу, полный каталог автоматически не читается. Фильтрация/пагинация выполняются до runtime metadata, на Qt читается только страница.
+
+Пример адресного вызова: `describe_settings {"scope":"global","keys":["support_z_distance","support_xy_distance"]}`; категории и поиск можно пересекать: `{"scope":"global","category":"support","query":"pattern","limit":5}`. Ответ первой страницы без фильтров имеет total120/offset0/limit20/returned20/next_offset20/truncated=true; фактические values этим примером не задаются. Иллюстративный элемент:
 
 ```json
 {"key":"speed_print","available":true,"type":"float","value":50.0,"unit":"mm/s","enabled":true,"settable":true,"options":{},"settable_globally":true,"settable_per_extruder":true,"read_only":false,"minimum_value":0.0,"maximum_value":null,"minimum_value_warning":10.0,"maximum_value_warning":150.0,"limitations":[]}
@@ -134,11 +146,13 @@ Describe data имеет `{scope,extruder_id?,settings:[...]}` ровно для
 
 available означает наличие value в стеке, settable — разрешение выбранной области с учётом userChanges/readonly; enabled/type проверяются отдельно. Неизвестные поля и непригодное значение — null с limitations, не собственная догадка. Пустая строка unit допустима как runtime-единица без размерности. Отсутствующая граница — null; нечисловая/неконечная граница помечается limitation. Неизвестное enum options или значение вне них не выдаётся за подтверждённое value.
 
+Каждый элемент также содержит `label`, `category`, `description`, `text_source:{label,category,description}`, `label_truncated`, `description_truncated`. Label из Definition API обрезается до200 символов, description до500; происхождение `definition_api`. Fallback краткого label и category — `catalog`, неизвестное description=null и его источник=null. Статический текст не подтверждает runtime-доступность/значение. Чтение через подтверждённые ContainerStack.hasProperty/getProperty; default_value не подставляется, выражения вычисляет STE. Enum options остаются целиком из runtime API; отдельной квоты нет, общий размер зависит также от длин options/limitations и локализации. Оценка исходных options/страниц и границы замера — в отчёте13. Усечение страницы (`truncated`) и текста (`description_truncated`) имеют разные значения.
+
 Запись идёт только в userChanges целевого стека. Hard bounds запрещают выход, несогласованные/невычисленные hard bounds дают slicer_error. Warning bounds не запрещают запись: при выходе setter добавляет warnings, как и при недоступных необязательных метаданных. Ни одна температура не является командой нагрева. Зависимые значения могут пересчитаться штатно; сохранение всех derived values не обещается.
 
 Before/after читаются из стека и нормализуются по runtime-типу; запрос не подставляется вместо after. Смена машины/целевого стека/userChanges или отсутствие подтверждения — ошибка. Подтверждённый no-op не вызывает setter и не инвалидирует slice. Реальная попытка изменения, включая неопределённый setter, инвалидирует прежнюю нарезку/будущий экспорт; автоматического отката/повтора нет. Прежний общий lock охватывает импорт/нарезку/экспорт/выбор профиля; записи получают slicing_busy, чтения доступны. QtBridge сохраняет обычный бюджет 5 секунд и отмену просроченного pending callback; после running timeout нужны чтение/UI до дальнейших изменений.
 
-Дополнительные операционные коды: setting_metadata_unavailable, setting_option_unavailable, setting_disabled, setting_read_only, setting_scope_unavailable, setting_context_changed. Сохранены setting_unavailable/setting_out_of_range/setting_not_applied, extruder_not_found/no_active_machine, slicing_busy/qt_timeout/slicer_error/slicer_not_connected. Полные проверки и ограничения: [отчёт ТЗ 07](reports/TASK_07_REPORT.md).
+Дополнительные операционные коды: setting_metadata_unavailable, setting_option_unavailable, setting_disabled, setting_read_only, setting_scope_unavailable, setting_context_changed. Сохранены setting_unavailable/setting_out_of_range/setting_not_applied, extruder_not_found/no_active_machine, slicing_busy/qt_timeout/slicer_error/slicer_not_connected. Полные проверки и ограничения: [отчёт ТЗ 07](reports/TASK_07_REPORT.md), [отчёт ТЗ13](reports/TASK_13_REPORT.md). Инструкции LLM требуют адресного describe и не запрашивают120 полных описаний на каждом ходе; прежние лимиты8LLM/16tools/120s/30s и запрет повторов после неизвестного исполнения сохранены. UI показывает количество найденных/выданных параметров и наличие следующей страницы, подробности остаются закрытыми.
 
 ### Пользовательские профили — ТЗ12, native-приёмка открыта
 
@@ -325,7 +339,9 @@ Preflight сохраняет slice_not_found/slice_not_ready/slice_result_stale;
 | --- | --- | --- |
 | `GET /api/status` | Возможности и состояние подключений, лимиты | 200 |
 | `POST /api/sessions` | Создать диалог, тело `{}` | 201 |
+| `GET /api/sessions` | Список метаданных диалогов и состояние архива, без тел сообщений | 200 |
 | `GET /api/sessions/{session_id}` | История и актуальное состояние диалога | 200 |
+| `DELETE /api/sessions/{session_id}` | Удалить историю выбранного диалога; без тела/query | 200 |
 | `POST /api/sessions/{session_id}/messages` | Принять сообщение и запустить цикл агента | 202 |
 | `GET /api/events?session_id=...&after=0` | Получить события после курсора | 200 |
 | `POST /api/files` | Роль2A: одно вложение в приватное хранилище, без импорта/LLM | 201 |
@@ -341,7 +357,9 @@ Preflight сохраняет slice_not_found/slice_not_ready/slice_result_stale;
 {
   "api_version": 1,
   "mode": "plugin",
-  "capabilities": {"chat": true, "attachments": true, "events": true, "downloads": true, "background_slice_events": true},
+  "capabilities": {"chat": true, "attachments": true, "events": true, "downloads": true, "background_slice_events": true, "saved_dialogs": true},
+  "process_id": "opaque-process-epoch",
+  "operation_busy": false,
   "llm": {"configured": true, "has_key": true},
   "agent_state": "idle",
   "slicer": {"connected": true, "machine_name": "Stereotech Hybrid 530 V5.2.4", "printing_mode": "classic"},
@@ -362,6 +380,24 @@ POST `/api/sessions` возвращает:
 
 GET `/api/sessions/{session_id}` возвращает ту же форму с фактической историей. `messages` — упорядоченный массив `{message_id,role,text,attachment_ids,created_at,event_id}`; user также содержит attachments — массив безопасных метаданных upload в исходном порядке, без путей/байтов; role: user/assistant. У user есть `client_message_id`, у assistant — `is_error`. `tool_events` содержит сохранённые tool_started/tool_finished; для восстановления ленты объединить их с messages по `event_id`/`id`. Системный промпт/служебная LLM-история не выдаются. Snapshot и курсор атомарны.
 
+Роль2G добавляет title/created_at/updated_at/revision, restored/history_truncated, process_id, operation_busy и `persistence:{state,saved_revision,error}`. State: temporary (RAM), saving, saved, error; error — безопасная строка или null. Saved означает подтверждённую запись данной revision на диск; принятие202 и idle отдельно этого не обещают. process_id — непрозрачная эпоха процесса, не секрет/путь; она также есть в status/events. После рестарта исторические messages могут иметь role=note, historical=true и attachments только `{name,expired:true}`, без attachment_ids/client_message_id. Полный старый tool-протокол заменён безопасными текстовыми итогами; tool_events после восстановления содержит только события нового процесса.
+
+### Сохранённые диалоги — роль2G
+
+GET `/api/sessions` → `{ready,persistent,error,sessions:[{session_id,title,created_at,updated_at,revision,history_truncated,...}]}`; загруженные в RAM записи также содержат persistence. Ready=false означает асинхронное чтение каталога; error сообщает недоступность/обнаруженную порчу. Persistent означает подключённое хранилище, не гарантию успешной записи. Список отсортирован по updated_at и не загружает все тела в RAM/LLM. GET отдельного сохранённого диалога лениво читает/валидирует его в файловом worker вне ServiceLock/Qt; GET/snapshot/polling доступны при busy. Глобального выбранного диалога на сервере нет. Создание пустого дескриптора сохраняет прежний API-допуск при busy, сцену не меняет; UI блокирует Новый/выбор/удаление/отправку при active/pending/наблюдаемой своей операции. POST сообщения сохраняет прежний общий guard, DELETE отвергается409 при active-turn или собственном активном slice/export.
+
+DELETE → `{session_id,deleted:true}` только после подтверждения файловой операции; не отменяет engine и не удаляет3MF/G-code пользователя. Неизвестный ID404; body/query запрещены, Host/Origin прежние. При history_deleting409/неподтверждённом delete503 сначала перечитать список, автоматически не повторять. Tombstone не даёт поздним snapshot/finish/load вернуть удалённый чат. Повреждённая запись видна отдельной строкой: чтение даёт ошибку, удаление возможно явно. Ошибки archive I/O/timeout выдаются без путей/содержимого; history_loading503, history_not_found, history_io_error/history_timeout503; session_limit409 при пределе числа. Ошибка асинхронного save/квоты видна в persistence.error и не объявляется сохранением.
+
+Runtime-каталог — Resources.getDataStoragePath()/ai_assistant/chats, путь получается штатно наQt, весь файловый I/O — одним worker. ВерсияJSON1, отдельный session_UUID.json и производный index.json; до20 диалогов,100 архивных сообщений/текстовых итогов,512КиБ на чат,10МиБ суммарно с резервом16КиБ под индекс. Новая запись при переполнении получает видимую ошибку; старые файлы не заменяются пустыми. При обрезке старых сообщений history_truncated=true, UI показывает границу архива. Для записи новой копии временно нужно место ещё под файл до512КиБ; temp очищается после обработанной ошибки. Учитываются и посторонние файлы в этом каталоге; копии повреждённого индекса сохраняются с суффиксом.corrupt. Архив локальный JSON без шифрования; произвольные пути клиента не принимаются, ID формирует сервер.
+
+Сохраняются только выбранные текстовые поля, безопасные краткие результаты и имена истёкших вложений. Ключ (также в user/assistant/title), Preferences/auth/raw provider requests, base64/байты, пути, operational IDs и живые URL не сериализуются. Сериализация/санитизация вне ServiceLock, снимок ограничен; монотонная revision и последовательный worker не дают старому снимку заменить новый. Temp→os.replace; saved только после записи файла/индекса. При закрытии Qt только ставит финальный снимок/stop, отдельный non-daemon cleanup worker даёт до2с ожидания внеQt. Предыдущие saved revisions уже на диске; авария ОС/зависший диск может потерять последнюю неподтверждённую revision. Fsync/защита от одновременных экземпляров STE с одним каталогом не обещаются. Порча/неподдержанная версия сохраняются для явного решения; индекс восстанавливается из валидных файлов.
+
+После рестарта: отдельный ограниченный **текстовый исторический контекст**, максимум12 блоков выбранного чата; без raw tool_calls/results/arguments/_attachment_ids, старых IDs/URL и ownership. Точность старого протокола tools не сохраняется. Ничего не выполняется при открытии; interrupted-turn отмечается прерванным, старые pending/client ledger/observer/nativejobs не восстанавливаются. Сцена общая и историей не восстанавливается. Перед первым новым изменением восстановленного разговора нужны успешные get_slicer_state/list_models этого хода; history_refresh_required со stage=preflight/executed=false означает, что изменяющий tool не запускался. Теория не вызывает чтения сама. После успешного первого изменения обычные правила чтения текущих параметров/ID сохраняются.
+
+Frontend сравнивает process_id на status/snapshot/events: при смене выполняет только GET restore, убирает старые capabilities/pending/вложения, сообщает об истечении попытки. Старый pending не POSTится новым процессом даже при совпадении session/native ID или курсора. В том же процессе явный повтор неизвестной отправки использует прежний полный body/client_message_id; автоPOST нет. В dev по умолчанию временные RAM-чаты (saved_dialogs=false); тесты используют явный временный chat_directory, настоящий AppData не трогают. Runtime-приёмка и browser QA отдельны; отчёт ROLE_02G_REPORT.md.
+
+### Приём сообщения
+
 POST `/api/sessions/{session_id}/messages`:
 
 ```json
@@ -370,7 +406,7 @@ POST `/api/sessions/{session_id}/messages`:
 
 `client_message_id` — ID, создаваемый UI для одной попытки отправки; повтор того же сообщения после сетевой ошибки использует тот же ID. Backend возвращает прежний ответ для того же ID и тела, а для того же ID с другим телом — 409. Не повторять автоматически сообщение с новым ID: это может повторить изменение сцены.
 
-`text` — непустая строка после trim, входная длина до 12000 символов; `client_message_id` — непустая строка до 128. Разрешены только эти три поля. attachment_ids можно опустить или передать до5 уникальных зарегистрированных ID (строки до128 символов); суммарно изображения до10MiB. До принятия проверяются типы/лимиты/реестр: неизвестный ID404 file_not_found, превышение413 attachment_limit, дубликаты/неверный тип400 invalid_arguments. Идемпотентность сравнивает принятый trim-текст и полный массив вложений; конфликт с уже принятым ID даёт 409 даже для неподдерживаемого нового вложения. Для всей сцены допускается один активный turn: новый запрос в любом диалоге получает 409 agent_busy. Принятое сообщение сохраняется в истории до ответа HTTP 202:
+`text` — непустая строка после trim, входная длина до 12000 символов; `client_message_id` — непустая строка до 128. Разрешены только эти три поля. attachment_ids можно опустить или передать до5 уникальных зарегистрированных ID (строки до128 символов); суммарно изображения до10MiB. До принятия проверяются типы/лимиты/реестр: неизвестный ID404 file_not_found, превышение413 attachment_limit, дубликаты/неверный тип400 invalid_arguments. Идемпотентность сравнивает принятый trim-текст и полный массив вложений; конфликт с уже принятым ID даёт 409 даже для неподдерживаемого нового вложения. Для всей сцены допускается один активный turn: новый запрос в любом диалоге получает 409 agent_busy. Принятое сообщение появляется в RAM-истории до ответа HTTP202, дисковая запись асинхронна и подтверждается отдельно persistence.saved:
 
 ```json
 {"session_id":"session_1","message_id":"message_1","client_message_id":"client_1","agent_state":"processing"}
@@ -520,6 +556,8 @@ GET принимает только зарегистрированный downloa
 UI различает HTTP-ошибку, обрыв связи и операционную ошибку события. После сетевого сбоя не повторять автоматически изменение сцены или настройки. Для повторной отправки сообщения используется прежний client_message_id; для выяснения фактического состояния — snapshot/чтение.
 
 Legacy health/message, MCP и static сохраняют прежние HTTP-ошибки со строкой error; новый API использует объект выше. Операционные ошибки STE (включая slicer_not_connected) приходят в tool_finished.result и не маскируются успешным изменением. После 202 возможны error-коды network_timeout/network_error/auth_error/tls_error, invalid_response/invalid_message/invalid_tool_call/empty_message, step_limit/tool_limit/budget_exceeded, mutation_unconfirmed/agent_failed/worker_failed/service_stopped. Ошибка инструмента сохраняет прежний код адаптера; неподтверждённая мутация завершает turn. Ключ редактируется в данных/тексте, raw provider bodies не выдаются.
+
+При network_timeout существующее error.message/ошибочное assistant_message содержит номер LLM-обращения в ходе, измеренное monotonic время вызова complete, выделенный бюджет min(30с, остаток120с) и остаток бюджета хода перед обращением. Дополнительно — число подтверждённых изменяющих вызовов до отказа (включая0); их фиксированные имена/реальные tool-results сохраняются как прежде. Это количество успешных tool-ответов/принятых запусков, не число изменённых настроек и не completed engine. Новых полей/эндпойнтов/логов нет; UI показывает сообщение прежним способом. Время complete включает локальную подготовку/transport/чтение, не отделяет сеть/очередь/генерацию провайдера. Задержка этим изменением не устранена,30/120/8/16/retry-политика прежние; поздний ответ не запускает tools. См. [FIX_LLM_TIMEOUT_REPORT.md](reports/FIX_LLM_TIMEOUT_REPORT.md).
 
 ## 7. Последовательность работы frontend
 

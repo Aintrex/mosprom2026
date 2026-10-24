@@ -77,8 +77,12 @@ class SlicerAdapter(object):
         validate_setting_arguments(arguments, write=True)
         return self._run(lambda bridge: self._write_setting(bridge, arguments), write=True, worker=True)
 
-    def describe_settings(self, scope, extruder_id=_UNSET):
+    def describe_settings(self, scope, extruder_id=_UNSET, keys=_UNSET, category=_UNSET, query=_UNSET,
+                          offset=_UNSET, limit=_UNSET):
         arguments = self._setting_arguments({"scope": scope}, extruder_id)
+        for name, value in (("keys", keys), ("category", category), ("query", query), ("offset", offset), ("limit", limit)):
+            if value is not _UNSET:
+                arguments[name] = value
         validate_setting_arguments(arguments, describe=True)
         return self._run(lambda app: settings.describe_settings(app, **arguments))
 

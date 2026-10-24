@@ -2,6 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>STE Slicer AI Assistant</title>
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -13,13 +14,23 @@
         <span id="status-badge" class="badge">Проверка...</span>
       </div>
 
+      <details class="card chat-history" id="chat-history">
+        <summary>Диалоги</summary>
+        <p id="history-status" role="status">Чтение списка…</p>
+        <div id="chat-list" role="list" aria-label="Список диалогов"></div>
+        <div class="history-actions">
+          <button id="btn-open-session" class="btn">Открыть</button>
+          <button id="btn-delete-session" class="btn">Удалить</button>
+        </div>
+      </details>
+
       <section class="card">
         <h2>Состояние среды</h2>
         <div class="kv"><span>Принтер:</span><strong id="st-printer">—</strong></div>
         <div class="kv"><span>Режим:</span><strong id="st-mode">—</strong></div>
         <p>Настройки, качество и материалы можно запросить в чате.</p>
-        <p id="slice-state">Снимков нарезки ещё нет.</p>
-        <p id="export-state">Своих экспортов ещё нет.</p>
+        <div id="slice-state">Снимков нарезки ещё нет.</div>
+        <div id="export-state">Своих экспортов ещё нет.</div>
       </section>
 
       <section class="card">
@@ -40,13 +51,14 @@
     <main class="chat-panel">
       <header class="chat-header">
         <div>
-          <strong>Диалог с ИИ-технологом</strong>
+          <strong id="chat-title">Диалог с ИИ-технологом</strong>
+          <span id="save-state" class="sub" role="status"></span>
           <span id="agent-state-text" class="sub">Ожидание запроса</span>
         </div>
         <button id="btn-new-session" class="btn">Новый диалог</button>
       </header>
 
-      <div id="messages" class="messages"></div>
+      <div id="messages" class="messages" role="log" aria-label="Переписка и результаты инструментов"></div>
 
       <div id="artifacts" class="attachment-bar" aria-live="polite"></div>
       <div class="attachment-bar">

@@ -6,7 +6,7 @@ from ..slicer.profiles import TOOL_FIELDS, validate_profile_arguments
 from ..slicer.models import MODEL_FIELDS, validate_model_arguments
 from ..slicer.slicing import SLICE_FIELDS, validate_slice_arguments
 from ..slicer.exports import EXPORT_FIELDS, validate_export_arguments
-from ..slicer.settings import SETTING_KEYS
+from ..slicer.settings import SETTING_KEYS, CATEGORIES
 from ..slicer.transforms import TRANSFORM_FIELDS, validate_transform_arguments
 from ..slicer.arrangement import ARRANGEMENT_FIELDS, validate_arrangement_arguments
 from ..uploads import UploadError
@@ -86,10 +86,16 @@ class ToolRegistry(object):
                 "type": "object", "properties": {field: {"type": "string", "minLength": 1}},
                 "required": [field], "additionalProperties": False}})
 
-        self._tools.append({"name": "describe_settings", "description": "Allowlist текущего стека: реальные значения, типы/options, единицы и ограничения записи.",
+        self._tools.append({"name": "describe_settings", "description": "Адресные метаданные 120 разрешённых параметров: labels/описания, фактические значения/типы/options/границы. Передай keys для известных ключей или category/query для поиска; фильтры пересекаются до чтения API. По умолчанию первая страница20, max30; total/next_offset указывают остаток. query ищет по key/source-label без регистра; явная пустая строка даёт0. Не читай все страницы без запроса пользователя.",
                             "inputSchema": {"type": "object", "properties": {
                                 "scope": {"type": "string", "enum": ["global", "extruder"]},
-                                "extruder_id": {"type": "string", "minLength": 1}},
+                                "extruder_id": {"type": "string", "minLength": 1},
+                                "keys": {"type": "array", "minItems": 1, "maxItems": 20, "uniqueItems": True,
+                                         "items": {"type": "string", "enum": list(SETTING_KEYS)}},
+                                "category": {"type": "string", "enum": list(CATEGORIES)},
+                                "query": {"type": "string", "maxLength": 80},
+                                "offset": {"type": "integer", "minimum": 0},
+                                "limit": {"type": "integer", "minimum": 1, "maximum": 30}},
                                 "required": ["scope"], "additionalProperties": False}})
 
         descriptions = {"get_model_state": "Мировые origin/матрица 4x4/габариты и outside верхней модели, Uranium Y-up, мм.",

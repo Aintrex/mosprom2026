@@ -2,17 +2,11 @@
 import math
 
 from .qt_bridge import SlicerError
+from .settings_catalog import SETTING_KEYS, SETTING_TYPES, CATALOG_BY_KEY, CATEGORIES
 
 
-SETTING_KEYS = ("layer_height", "layer_height_0", "line_width", "wall_line_count", "top_bottom_thickness",
-                "infill_sparse_density", "infill_pattern", "support_enable", "support_type", "support_angle",
-                "material_print_temperature", "material_bed_temperature", "speed_print", "retraction_enable",
-                "retraction_amount", "retraction_speed", "cool_fan_enabled", "cool_fan_speed", "adhesion_type")
-# Типы подтверждены fdmprinter.def.json; runtime должен подтвердить их повторно.
-SETTING_TYPES = {key: "float" for key in SETTING_KEYS}
-SETTING_TYPES.update({"wall_line_count": "int", "support_enable": "bool", "retraction_enable": "bool",
-                      "cool_fan_enabled": "bool", "infill_pattern": "enum", "support_type": "enum", "adhesion_type": "enum"})
 BOUNDS = ("minimum_value", "maximum_value", "minimum_value_warning", "maximum_value_warning")
+DESCRIBE_FILTERS = ("keys", "category", "query", "offset", "limit")
 
 
 def finite(value):
@@ -50,9 +44,24 @@ def validate_setting_arguments(arguments, write=False, describe=False):
         position = arguments.get("extruder_id")
         if not isinstance(position, str) or not position:
             raise ValueError("extruder_id — непустая строковая позиция runtime-экструдера")
-    if set(arguments) != fields:
-        raise ValueError("Укажите только поля: %s" % ", ".join(sorted(fields)))
+    allowed = fields | set(DESCRIBE_FILTERS) if describe else fields
+    if not fields.issubset(arguments) or set(arguments) - allowed:
+        raise ValueError("Обязательные поля: %s; допустимые поля: %s" % (", ".join(sorted(fields)), ", ".join(sorted(allowed))))
     if describe:
+        if "keys" in arguments:
+            keys = arguments["keys"]
+            if (not isinstance(keys, list) or not 1 <= len(keys) <= 20 or
+                    any(not isinstance(key, str) or key not in SETTING_TYPES for key in keys) or len(set(keys)) != len(keys)):
+                raise ValueError("keys — от 1 до 20 уникальных разрешённых ключей")
+        if "category" in arguments and (not isinstance(arguments["category"], str) or arguments["category"] not in CATEGORIES):
+            raise ValueError("category должна быть одной из категорий каталога")
+        if "query" in arguments and (not isinstance(arguments["query"], str) or len(arguments["query"]) > 80):
+            raise ValueError("query — строка до 80 символов")
+        for name, low, high in (("offset", 0, None), ("limit", 1, 30)):
+            if name in arguments:
+                value = arguments[name]
+                if isinstance(value, bool) or not isinstance(value, int) or value < low or high is not None and value > high:
+                    raise ValueError("offset — целое >=0; limit — целое от 1 до 30")
         return
     key = arguments["key"]
     if not isinstance(key, str) or key not in SETTING_TYPES:
@@ -99,7 +108,11 @@ def _value(stack, key, kind, options=None):
 
 
 def metadata(stack, key, scope):
+    catalog = CATALOG_BY_KEY[key]
     item = {"key": key, "available": bool(stack.hasProperty(key, "value")), "type": None,
+            "label": catalog["label"], "category": catalog["category"], "description": None,
+            "text_source": {"label": "catalog", "category": "catalog", "description": None},
+            "description_truncated": False, "label_truncated": False,
             "value": None, "unit": None, "enabled": None, "settable": None, "options": None,
             "settable_globally": None, "settable_per_extruder": None, "read_only": None,
             "limitations": []}
@@ -107,6 +120,16 @@ def metadata(stack, key, scope):
     if not item["available"]:
         item["limitations"].append("Нет настройки в текущем стеке")
         return item
+    label = _property(stack, key, "label")
+    if isinstance(label, str) and label.strip():
+        item["label"] = label[:200]
+        item["label_truncated"] = len(label) > 200
+        item["text_source"]["label"] = "definition_api"
+    description = _property(stack, key, "description")
+    if isinstance(description, str) and description.strip():
+        item["description"] = description[:500]
+        item["description_truncated"] = len(description) > 500
+        item["text_source"]["description"] = "definition_api"
     kind = _property(stack, key, "type")
     item["type"] = kind if isinstance(kind, str) else None
     unit = _property(stack, key, "unit")
@@ -146,9 +169,20 @@ def metadata(stack, key, scope):
     return item
 
 
-def describe_settings(app, scope, extruder_id=None):
+def describe_settings(app, scope, extruder_id=None, keys=None, category=None, query=None, offset=0, limit=20):
+    # Catalog-only filtering precedes any setting metadata access on Qt.
+    query_folded = query.strip().casefold() if query is not None else None
+    selected = [key for key in SETTING_KEYS if (keys is None or key in keys) and
+                (category is None or CATALOG_BY_KEY[key]["category"] == category) and
+                (query_folded is None or query_folded and
+                 (query_folded in key.casefold() or query_folded in CATALOG_BY_KEY[key]["label"].casefold()))]
+    total = len(selected)
+    page = selected[offset:offset + limit]
     global_stack, stack = target(app, scope, extruder_id)
-    result = {"scope": scope, "settings": [metadata(stack, key, scope) for key in SETTING_KEYS]}
+    next_offset = offset + len(page) if offset + len(page) < total else None
+    result = {"scope": scope, "settings": [metadata(stack, key, scope) for key in page],
+              "total": total, "offset": offset, "limit": limit, "returned": len(page),
+              "next_offset": next_offset, "truncated": next_offset is not None}
     if scope == "extruder":
         result["extruder_id"] = extruder_id
     return result

@@ -59,12 +59,14 @@ def create_server(service, port=0):
                 self.download_file(path.split("/")[3])
             elif path == "/api/health":
                 self.respond(200, {"status": "ok", "mode": "scaffold"})
-            elif path == "/api/status" or path == "/api/events" or path.startswith("/api/sessions/"):
+            elif path in ("/api/status", "/api/events", "/api/sessions") or path.startswith("/api/sessions/"):
                 try:
                     if service.closed:
                         raise APIError(503, "service_stopped", "Плагин завершает работу")
                     if path == "/api/status" and not parsed.query:
                         result = service.get_status()
+                    elif path == "/api/sessions" and not parsed.query:
+                        result = service.list_sessions()
                     elif path == "/api/events":
                         query = parse_qs(parsed.query, keep_blank_values=True)
                         if (set(query) - {"session_id", "after"} or len(query.get("session_id", [])) != 1 or
@@ -91,6 +93,25 @@ def create_server(service, port=0):
                     self.respond(200, stream.read(), content_type)
             else:
                 self.not_found()
+
+        def do_DELETE(self):
+            if not self.is_local_request():
+                self.forbidden()
+                return
+            parsed = urlsplit(self.path)
+            parts = parsed.path.split("/")
+            if parsed.query or parsed.fragment or len(parts) != 4 or parts[:3] != ["", "api", "sessions"]:
+                self.not_found()
+                return
+            try:
+                if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Length", "0") != "0":
+                    raise APIError(400, "invalid_arguments", "Удаление диалога не принимает тело")
+                self.respond(200, service.delete_session(parts[3]))
+            except APIError as exc:
+                self.api_error(exc)
+            except Exception as exc:
+                logging.getLogger(__name__).error("REST delete: %s", type(exc).__name__)
+                self.api_error(APIError(500, "internal_error", "Удаление не подтверждено; перечитайте список"))
 
         def do_POST(self):
             if not self.is_local_request():
