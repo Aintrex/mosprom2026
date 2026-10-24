@@ -1,5 +1,9 @@
 """Known CylindricalBackend stages only; native handlers remain untouched."""
+import logging
+
 from .qt_bridge import SlicerError
+
+LOGGER = logging.getLogger(__name__)
 
 
 class FullStages(object):
@@ -9,7 +13,10 @@ class FullStages(object):
         self.prep_done = self.basement_done = self.cli_done = False
         self.cura_done = self.parser_started = self.parser_done = False
         self.exitcode = None
+        self.quit_pending = self.final_pending = False
+        self.process_unknown = False
         self.old_process = record.backend._glicer_process
+        record.stage = "preparing"
         try:
             if type(record.backend).__name__ != "CylindricalBackend":
                 raise ValueError("Unknown full backend type")
@@ -30,19 +37,77 @@ class FullStages(object):
                     raise ValueError("Uninitialized child socket")
             self.cura = self._endpoint(children["CuraEngineBackend"])
             self.parser = self._endpoint(children["CLIParserBackend"])
+            self.shared_signals = any(getattr(record.backend, name) is getattr(child, name)
+                for child in children.values() for name in ("backendQuit", "backendStateChange", "processingProgress"))
+            self._diagnose("stage_observed")
         except (AttributeError, ImportError, TypeError, ValueError):
             raise SlicerError("backend_state_unavailable", "Не подтверждён состав/инициализация подчинённых backend полного режима")
 
     @staticmethod
     def _endpoint(backend):
         return {"backend": backend, "old_socket": backend._socket, "old_process": backend._process,
-                "socket": None, "process": None, "resetting": False, "active": False}
+                "socket": None, "process": None, "resetting": False, "active": False,
+                "exit_pending": False, "exit_confirmed": False}
+
+    def _stage(self):
+        if self.record.state == "completed":
+            return "completed"
+        if self.parser_done:
+            return "finalizing"
+        if self.parser_started:
+            return "parser"
+        if self.process is not None:
+            return "glicer"
+        if self.basement_done:
+            return "cura"
+        return "basement" if self.prep_done else "preparing"
+
+    def _diagnose(self, event, process="unknown", exit_code=None):
+        if self.record.state == "failed":
+            return  # Keep the first attributable failure, not a later unknown EOF.
+        self.record.stage_diagnostics = {"event": event, "process": process,
+            "exit_code": exit_code if type(exit_code) is int else None,
+            "shared_signals": self.shared_signals}
+
+    def _name(self, endpoint):
+        return "cura_engine" if endpoint is self.cura else "cli_parser"
+
+    def _later(self, handler, *args):
+        self.owner.app.callLater(self._callback, handler, args)
+
+    def _callback(self, handler, args):
+        if not self._attached():
+            return
+        try:
+            handler(*args)
+        except Exception as exc:
+            LOGGER.error("Full stage callback: %s", type(exc).__name__)
+            self._diagnose("observation_error")
+            self._fail("slicing_failed", "Ошибка проверки собственной стадии полного режима; см. журнал STE")
+            self._refresh()
+
+    def quit(self):
+        # UM Backend emits EOF without PID, including old stdout readers. Functions
+        # run before native bound handlers, so inspect owned refs on the next Qt turn.
+        if not self.quit_pending:
+            self.quit_pending = True
+            self._later(self._after_quit)
+
+    def _after_quit(self):
+        self.quit_pending = False
+        if not self._attached():
+            return
+        self._diagnose("quit_source_unknown")
+        self._refresh()  # poll() of owned processes, never attribution by signal alone.
 
     def _fail(self, code, message):
         self.owner._fail(self.record, code, message)
 
+    def _attached(self):
+        return self.record is self.owner.record and self.record.backend is not None
+
     def _refresh(self):
-        if self.record is not self.owner.record:
+        if not self._attached():
             return
         if self.owner.closed:
             self.owner._closed_cli_refresh(self.record)
@@ -60,12 +125,12 @@ class FullStages(object):
                 return
             endpoint["resetting"] = True
             # Observer runs before the native bound handler that replaces the child socket.
-            self.owner.app.callLater(self._after_reset, endpoint)
+            self._later(self._after_reset, endpoint)
         if self.owns(job):
             self.owner.app.callLater(self._refresh)
 
     def _after_reset(self, endpoint):
-        if self.record is not self.owner.record:
+        if not self._attached():
             return
         backend = endpoint["backend"]
         socket, process = backend._socket, backend._process
@@ -77,31 +142,62 @@ class FullStages(object):
             self._fail("slicing_conflict", "Не подтверждён штатный restart процесса подчинённого backend")
             return
         endpoint["socket"], endpoint["process"], endpoint["active"] = socket, process, True
+        self._diagnose("expected_process_replaced", self._name(endpoint))
         def error(record, event):
-            if self._settled(endpoint):
-                return  # A stage that already delivered its result may drop its connection.
             if socket is backend._socket and event.getErrorCode() != self.debug_error:
-                self._fail("slicing_parser_failed", "Ошибка socket подчинённого backend полного режима")
+                if self.final_pending:
+                    self._later(self._socket_error, endpoint, socket)
+                else:
+                    self._socket_error(endpoint, socket)
         self.owner._connect(self.record, socket.error, error)
         self._refresh()
+
+    def _socket_error(self, endpoint, socket):
+        if self._outer_final_pending():
+            self._after_final()
+        if not self._attached() or self._settled(endpoint):
+            return
+        # Captured socket failed even if the native handler already replaced it.
+        if socket is endpoint["socket"]:
+            self._diagnose("socket_error", self._name(endpoint))
+            self._fail("slicing_parser_failed", "Ошибка socket собственного %s полного режима" % self._name(endpoint))
+            self._refresh()
 
     def _settled(self, endpoint):
         # Cura is settled once Glicer started from its output; the parser after the final Done.
         return self.parser_done or endpoint is self.cura and self.cura_done
 
     def _observe_endpoint(self, endpoint):
-        if not endpoint["active"] or endpoint["resetting"] or self._settled(endpoint):
+        if not endpoint["active"] or endpoint["resetting"] or self.parser_done or self._outer_final_pending():
             return
         backend, process = endpoint["backend"], endpoint["process"]
-        if backend._socket is not endpoint["socket"]:
+        settled = self._settled(endpoint)
+        if backend._socket is not endpoint["socket"] and not settled:
             self._fail("slicing_parser_failed", "Поздняя смена socket подчинённого backend")
         if process is None:
             endpoint["process"] = backend._process  # First process may arrive after Listening.
             process = endpoint["process"]
-        elif backend._process is not process:
+        elif backend._process is not process and not settled:
             self._fail("slicing_conflict", "Поздняя смена процесса подчинённого backend")
-        if process is not None and process.poll() is not None:
-            self._fail("slicing_parser_failed", "Подчинённый процесс завершился до принятия результата")
+        code = process.poll() if process is not None else None
+        if code is not None and code != 0:
+            self._diagnose("process_exited", self._name(endpoint), code)
+            self._fail("slicing_parser_failed", "Собственный %s завершился с ненулевым кодом" % self._name(endpoint))
+        elif code == 0 and not settled and not endpoint["exit_pending"] and not endpoint["exit_confirmed"]:
+            endpoint["exit_pending"] = True
+            self._later(self._confirm_exit, endpoint, process)
+
+    def _confirm_exit(self, endpoint, process):
+        endpoint["exit_pending"] = False
+        endpoint["exit_confirmed"] = True
+        if self.final_pending:
+            self._after_final()
+        if not self._attached() or self._settled(endpoint):
+            return
+        if endpoint["process"] is process and process.poll() is not None:
+            self._diagnose("process_exited_without_result", self._name(endpoint), process.poll())
+            self._fail("slicing_parser_failed", "Собственный %s завершился без финального сообщения стадии" % self._name(endpoint))
+        self._refresh()
 
     def _job_done(self, job, kind):
         if not job.isFinished() or job.isRunning():
@@ -163,6 +259,7 @@ class FullStages(object):
             if backend._glicer_process is not self.process:
                 self._fail("slicing_conflict", "Потерян собственный Glicer полного режима")
             if self.exitcode is not None and self.exitcode != 0:
+                self._diagnose("process_exited", "glicer", self.exitcode)
                 self._fail("slicing_process_failed", "Glicer полного режима завершился с ненулевым кодом")
         if self.cli is not None:
             self.cli_done = self._job_done(self.cli, "cli")
@@ -171,6 +268,7 @@ class FullStages(object):
             self.parser_started = True
         if not self.owner.closed and self.basement_done:
             self.owner._follow_empty_buffer(r)
+        r.stage = self._stage()
 
     def processing(self):
         self.observe()
@@ -178,8 +276,42 @@ class FullStages(object):
         self.owner.app.callLater(self._refresh)
 
     def final(self):
-        if self.parser_started:
-            self.parser_done = True
+        if self.parser_started and not self.final_pending:
+            self.final_pending = True
+            self._later(self._after_final)
+
+    def _outer_final_pending(self):
+        return (self._attached() and self.final_pending and self.parser_started and
+                not self.record.backend._slicing and self.record.backend._start_slice_job_build_plate is None)
+
+    def _after_final(self):
+        r = self.record
+        if not self._attached():
+            return
+        # Outer Done is emitted before final substitutions/cleanup. A shared child
+        # Done does not clear these outer fields and cannot complete the full run.
+        if self._outer_final_pending():
+            for endpoint in (self.cura, self.parser):
+                if endpoint["process"] is None and endpoint["backend"]._socket is endpoint["socket"]:
+                    endpoint["process"] = endpoint["backend"]._process
+                process = endpoint["process"]
+                if process is None:
+                    self.process_unknown = True
+                    self._diagnose("process_not_observed", self._name(endpoint))
+                    self._fail("slicing_parser_failed", "Не подтверждён собственный процесс %s полного режима" % self._name(endpoint))
+                if process is not None and endpoint["backend"]._process is process:
+                    code = process.poll()
+                    if code is not None and code != 0:
+                        self._diagnose("process_exited", self._name(endpoint), code)
+                        self._fail("slicing_parser_failed", "Собственный %s завершился с ненулевым кодом" % self._name(endpoint))
+            self.parser_done = True  # Also settles read-only shutdown/failed guards.
+            self.observe()
+            r.stage = self._stage()
+            if not self.owner.closed and r.state != "failed":
+                r.done = True
+                self._diagnose("final_message", "cli_parser")
+            self._refresh()
+        self.final_pending = False
 
     def closed_event(self, handler, args):
         if handler == self._finished and args:
@@ -196,7 +328,7 @@ class FullStages(object):
         return endpoint["active"] and process is not None and process.poll() is None
 
     def busy(self):
-        return (any(job is not None and (job.isRunning() or not job.isFinished()) for job in (self.prep, self.basement, self.cli)) or
+        return (self.process_unknown or any(job is not None and (job.isRunning() or not job.isFinished()) for job in (self.prep, self.basement, self.cli)) or
                 self.process is not None and self.process.poll() is None or
                 self.cura["resetting"] or self.parser["resetting"] or
                 self.cura["active"] and not self.cura_done and (self.cura["process"] is None or self._live(self.cura)) or
@@ -205,7 +337,7 @@ class FullStages(object):
     def ready(self):
         # Child engines may exit/restart after delivering their stage; liveness is not required.
         return (self.prep_done and self.basement_done and self.cura_done and self.cli_done and self.exitcode == 0 and
-                self.parser_started and self.parser_done)
+                self.parser_started and self.parser_done and self.cura["process"] is not None and self.parser["process"] is not None)
 
     def owns(self, job):
         return job is self.prep or job is self.basement or job is self.cli

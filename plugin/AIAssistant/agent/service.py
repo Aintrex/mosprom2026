@@ -864,6 +864,11 @@ class AgentService(object):
                         "result": copy.deepcopy(data) if final else previous.get("result") if retained else None,
                         "valid": True if final else bool(data.get("valid")),
                         "error": None if final else copy.deepcopy(data.get("error"))}
+            for field in ("stage", "diagnostics"):
+                if field in data:
+                    snapshot[field] = copy.deepcopy(data[field])
+                elif final and same and field in previous:
+                    snapshot[field] = copy.deepcopy(previous[field])
             if observation is not None or same and "observation" in previous:
                 snapshot["observation"] = observation if observation is not None else previous["observation"]
             self._set_snapshot(session, "slice", snapshot, "slice_finished" if final else "slice_progress")

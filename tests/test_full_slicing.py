@@ -387,6 +387,8 @@ class FullTests(unittest.TestCase):
         self.backend.children["CLIParserBackend"].backendStateChange.emit(base.State.Done)
         self.assertFalse(self.adapter._slicing.record.done)
         self.backend.children["CLIParserBackend"]._process.code = 0
+        self.assertEqual(self.status()["state"], "running")
+        self.drain()  # EOF/exit0 is confirmed after queued final messages, not on poll alone.
         self.assertEqual(self.status()["error"]["code"], "slicing_parser_failed")
 
     def test_shutdown_unknown_budget_never_releases_live_guard(self):

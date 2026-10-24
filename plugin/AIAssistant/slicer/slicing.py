@@ -127,6 +127,7 @@ class _Run(object):
         self.result = None
         self.final_chunks = None
         self.printing_mode, self.cli = "classic", None
+        self.stage = self.stage_diagnostics = None
 
 
 class Slicing(object):
@@ -356,6 +357,9 @@ class Slicing(object):
                 record.state = "running"
             self._follow_empty_buffer(record)
         elif state == record.states.Done and record.begun:
+            if isinstance(record.cli, FullStages):
+                record.cli.final()
+                return  # Shared UM signals do not identify the outer final handler.
             if record.cli is not None:
                 record.cli.final()
             if record.state == "failed":
@@ -382,6 +386,9 @@ class Slicing(object):
         self._fail(record, "slicing_failed", "Ошибка подготовки/нарезки STE Slicer; подробности в сообщениях приложения и журнале")
 
     def _quit(self, record, *args):
+        if isinstance(record.cli, FullStages):
+            record.cli.quit()
+            return
         if record.done:
             return  # 5D parsers exit after their final Done; the buffer check decides validity.
         self._fail(record, "slicing_failed", "Процесс backend завершился до получения результата")
@@ -512,9 +519,12 @@ class Slicing(object):
 
     @staticmethod
     def _status_data(record):
-        return {"slice_id": record.slice_id, "state": record.state, "progress": record.progress,
+        data = {"slice_id": record.slice_id, "state": record.state, "progress": record.progress,
                 "printing_mode": record.printing_mode, "backend_id": record.backend_id, "build_plate": record.plate,
                 "valid": record.valid, "error": copy.deepcopy(record.error)}
+        if record.stage is not None:
+            data.update(stage=record.stage, diagnostics=copy.deepcopy(record.stage_diagnostics))
+        return data
 
     def _find(self, slice_id):
         for record in (self.record, self.last_completed):
