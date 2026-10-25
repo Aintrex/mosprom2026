@@ -9,8 +9,7 @@
   var selected = [], uploading = false;
   var elArtifacts = document.getElementById("artifacts"), artifacts = Object.create(null);
   var elHistory = document.getElementById("chat-list"), elHistoryStatus = document.getElementById("history-status");
-  var elOpen = document.getElementById("btn-open-session"), elDelete = document.getElementById("btn-delete-session");
-  var historyEntries = [], historyChoice = null, archiveReady = true, switching = false, operationBusy = false;
+  var historyEntries = [], archiveReady = true, switching = false, operationBusy = false;
   var processId = null, bootAttempted = false;
   var partialHistory = false, expiredPending = false;
   // Defaults mirror API_CONTRACT; /api/status replaces them with server limits.
@@ -18,6 +17,43 @@
     extensions: [".3mf", ".jpeg", ".jpg", ".obj", ".png", ".stl"]};
   var imported = Object.create(null), attachmentNotes = Object.create(null), rpcId = 0;
   var sceneModels = [], sceneChoice = null, sceneState = null, sceneBusy = false, sceneRead = false;
+  var groups = Object.create(null), ungrouped = 0, operationNotes = Object.create(null);
+  var elFileMessage = document.getElementById("file-message"), filesMounted = false;
+  var followFeed = true, elLatest = document.getElementById("btn-latest");
+  var elSidebar = document.getElementById("sidebar"), elSidebarToggle = document.getElementById("btn-sidebar");
+
+  function feedChanged() {
+    if (followFeed) elMessages.scrollTop = elMessages.scrollHeight;
+    elLatest.hidden = followFeed;
+  }
+  elMessages.addEventListener("scroll", function () {
+    followFeed = elMessages.scrollHeight - elMessages.clientHeight - elMessages.scrollTop < 80;
+    if (followFeed) elLatest.hidden = true;
+  });
+  elLatest.addEventListener("click", function () { followFeed = true; feedChanged(); });
+  function closeSidebar(returnFocus) {
+    elSidebar.className = "sidebar";
+    elSidebarToggle.setAttribute("aria-expanded", "false");
+    if (returnFocus) elSidebarToggle.focus();
+  }
+  elSidebarToggle.addEventListener("click", function () {
+    var open = elSidebarToggle.getAttribute("aria-expanded") !== "true";
+    elSidebar.className = "sidebar" + (open ? " is-open" : "");
+    elSidebarToggle.setAttribute("aria-expanded", String(open));
+    if (open) elNew.focus();
+  });
+  elSidebar.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") { closeSidebar(true); event.preventDefault(); }
+  });
+  var disclosures = ["state-card", "scene-card", "connection-card"].map(function (id) { return document.getElementById(id); });
+  disclosures.forEach(function (panel) {
+    panel.addEventListener("toggle", function () {
+      if (panel.open) disclosures.forEach(function (other) { if (other !== panel) other.open = false; });
+    });
+    panel.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") { panel.open = false; panel.querySelector("summary").focus(); event.preventDefault(); }
+    });
+  });
 
   function read(key) {
     try { return localStorage.getItem(key); } catch (err) { return null; }
@@ -47,22 +83,26 @@
     return api(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(data)});
   }
   function autosize() {
-    // Grow the one-line composer with its content; CSS max-height caps it, then it scrolls.
+    // Explicit pixel cap as well as CSS: long unbroken text never expands the grid.
     if (!elInput.style || typeof elInput.scrollHeight !== "number") return;
     elInput.style.height = "40px";
-    elInput.style.height = Math.max(40, elInput.scrollHeight) + "px";
+    var cap = Math.min(160, typeof window !== "undefined" ? window.innerHeight * 0.23 : 160);
+    elInput.style.height = Math.max(40, Math.min(cap, elInput.scrollHeight)) + "px";
     elInput.className = elInput.scrollHeight > elInput.clientHeight + 1 ? "scrolls" : "";
   }
   function buttons() {
     autosize();
     var busy = globalBusy || sessionBusy || operationBusy || switching;
     elSend.disabled = busy || !sessionId || uploading || selected.some(function (item) { return !!item.error; });
-    elSend.textContent = pending ? "Повторить попытку" : "Отправить";
+    elSend.textContent = pending ? "↻" : "↑";
+    elSend.setAttribute("aria-label", pending ? "Повторить прежнюю отправку" : "Отправить");
+    elSend.title = pending ? "Повторить прежнюю отправку с тем же ID" : "Отправить";
     elNew.disabled = busy || !!pending || uploading || !archiveReady;
     elFiles.disabled = busy || !!pending || uploading || !sessionId;
-    elOpen.disabled = busy || !!pending || uploading || !historyChoice;
-    elDelete.disabled = elOpen.disabled;
-    for (var index = 0; index < elHistory.children.length; index++) elHistory.children[index].disabled = busy || !!pending || uploading;
+    var prompts = document.querySelectorAll(".chip");
+    for (var promptIndex = 0; promptIndex < prompts.length; promptIndex++) prompts[promptIndex].disabled = busy || !!pending || uploading || !sessionId;
+    var historyButtons = elHistory.querySelectorAll("button");
+    for (var index = 0; index < historyButtons.length; index++) historyButtons[index].disabled = busy || !!pending || uploading;
     elState.className = "sub" + (sessionBusy || globalBusy ? " busy" : "");
     sceneButtons();
   }
@@ -76,14 +116,30 @@
   function historyRows() {
     clear(elHistory);
     historyEntries.forEach(function (item) {
-      var row = element("button", (item.session_id === sessionId ? "Текущий: " : "") + item.title +
-        (item.updated_at ? " · " + item.updated_at.replace("T", " ").slice(0, 16) + " UTC" : ""),
-        "history-entry" + (item.session_id === sessionId ? " current" : ""));
-      row.title = item.title;
-      row.addEventListener("click", function () {
-        historyChoice = item.session_id;
-        openSession(historyChoice).catch(function (err) { elHistoryStatus.textContent = err.message; });
+      var row = element("div", undefined, "history-row" + (item.session_id === sessionId ? " current" : ""));
+      row.setAttribute("role", "listitem");
+      var open = element("button", undefined, "history-entry history-open");
+      open.type = "button";
+      open.setAttribute("aria-pressed", String(item.session_id === sessionId));
+      open.appendChild(element("span", item.title, "history-name"));
+      var date = new Date(item.updated_at);
+      if (item.updated_at && !isNaN(date.getTime())) open.appendChild(element("time", date.toLocaleString("ru-RU", {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}), "history-date"));
+      open.title = item.title;
+      open.addEventListener("click", function () {
+        openSession(item.session_id).catch(function (err) { elHistoryStatus.textContent = err.message; });
       });
+      var remove = element("button", undefined, "history-delete");
+      remove.type = "button";
+      remove.title = "Удалить диалог «" + item.title + "»";
+      remove.setAttribute("aria-label", "Удалить диалог " + item.title);
+      var icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      icon.setAttribute("viewBox", "0 0 24 24"); icon.setAttribute("aria-hidden", "true"); icon.setAttribute("focusable", "false");
+      var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", "M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7");
+      path.setAttribute("fill", "none"); path.setAttribute("stroke", "currentColor"); path.setAttribute("stroke-width", "1.7");
+      path.setAttribute("stroke-linecap", "round"); path.setAttribute("stroke-linejoin", "round"); icon.appendChild(path); remove.appendChild(icon);
+      remove.addEventListener("click", function () { deleteSession(item.session_id, item.title); });
+      row.appendChild(open); row.appendChild(remove);
       elHistory.appendChild(row);
     });
     buttons();
@@ -93,7 +149,7 @@
       if (!Array.isArray(listing.sessions)) return; // Older server: keep the current-session flow.
       archiveReady = listing.ready !== false;
       historyEntries = listing.sessions;
-      if (!historyEntries.some(function (item) { return item.session_id === historyChoice; })) historyChoice = sessionId || (historyEntries[0] && historyEntries[0].session_id);
+      elHistoryStatus.className = listing.error ? "hint history-error" : "hint";
       elHistoryStatus.textContent = !archiveReady ? "Загрузка архива…" : listing.error ||
         (listing.persistent ? historyEntries.length ? "Локальная история. Сцена STE общая для всех чатов." : "Пока нет сохранённых диалогов." : "История только до закрытия процесса.");
       historyRows();
@@ -105,24 +161,26 @@
     var current = ++generation;
     return api("/api/sessions/" + encodeURIComponent(id)).then(function (snapshot) {
       if (current !== generation) return;
-      sessionId = id; dropSelected(); elInput.value = "";
+      sessionId = id; dropSelected(); elInput.value = ""; followFeed = true;
       save("ste_ai_session_id", sessionId); adopt(snapshot); historyRows();
-      if (elInput.focus) elInput.focus();
+      closeSidebar(false); if (elInput.focus) elInput.focus();
     }).then(function () { switching = false; buttons(); }, function (err) { switching = false; buttons(); throw err; });
   }
-  function deleteSession() {
-    if (elDelete.disabled || typeof confirm !== "function" || !confirm("Удалить выбранный диалог с этого компьютера? Сцена STE не изменится.")) return;
-    var deleted = historyChoice;
+  function deleteSession(deleted, title) {
+    if (!deleted || globalBusy || sessionBusy || operationBusy || switching || pending || uploading ||
+        typeof confirm !== "function" || !confirm("Удалить диалог «" + title + "» с этого компьютера? Сцена STE не изменится.")) return;
     switching = true; buttons();
-    api("/api/sessions/" + encodeURIComponent(deleted), {method: "DELETE"}).then(function () {
+    api("/api/sessions/" + encodeURIComponent(deleted), {method: "DELETE"}).then(function (result) {
+      if (!result || result.deleted !== true || result.session_id !== deleted) throw new Error("Удаление диалога не подтверждено. Перечитайте список; автоматического повтора нет.");
       if (deleted === sessionId) {
         ++generation; sessionId = null; save("ste_ai_session_id", null); clear(elMessages); clear(elArtifacts);
-        cards = {}; messages = {}; artifacts = Object.create(null); renderSlice(null); renderExport(null);
+        resetFeed(); renderSlice(null); renderExport(null);
         document.getElementById("chat-title").textContent = "Выберите диалог или создайте новый";
         document.getElementById("save-state").textContent = "";
       }
+      historyEntries = historyEntries.filter(function (item) { return item.session_id !== deleted; }); historyRows();
       return loadSessions();
-    }).catch(function (err) { elHistoryStatus.textContent = err.message; }).then(function () { switching = false; buttons(); });
+    }).catch(function (err) { elHistoryStatus.textContent = err.message; elHistoryStatus.className = "hint history-error"; }).then(function () { switching = false; buttons(); });
   }
   function sizeText(bytes) {
     if (!number(bytes) || bytes < 0) return "размер не сообщён";
@@ -144,25 +202,30 @@
     if (item.error) return "Ошибка: " + item.error + " Уберите файл, чтобы отправить сообщение.";
     if (pending) return item.file_id ? "Отправляется вместе с сообщением…" : "Отправляется…";
     if (!item.file_id) return "Загружается…";
-    return item.kind === "image" ? "Готово: прикреплено к сообщению (агент увидит фото)." :
-      "Готово: прикреплено к сообщению. В сцену ещё не импортировано — агент импортирует по запросу.";
+    return item.kind === "image" ? "Готово: прикреплено к сообщению." :
+      "Готово: прикреплено. В сцену ещё не импортировано.";
   }
   function attachmentList() {
     while (elAttachments.firstChild) elAttachments.removeChild(elAttachments.firstChild);
     var entries = pending ? (pending.attachments || (pending.attachment_ids || []).map(function (id) { return {name: id}; })) : selected;
+    var bad = entries.filter(function (item) { return !!item.error; }).length;
+    var status = document.getElementById("attachment-status");
+    status.hidden = !bad;
+    status.textContent = bad ? "Файлов с ошибкой: " + bad + ". Уберите их из списка вложений перед отправкой." : "";
     entries.forEach(function (item) {
       var row = element("div", undefined, "attachment-row" + (item.error ? " bad" : item.file_id ? " ready" : ""));
       if (item.preview) {
         var img = element("img", undefined, "thumb"); img.src = item.preview; img.alt = ""; row.appendChild(img);
-      }
+      } else row.appendChild(element("span", extensionOf(item.name).slice(1).toUpperCase() || "Файл", "file-icon"));
       var info = element("div", undefined, "attachment-info");
-      info.appendChild(element("strong", item.name));
+      var fileName = element("strong", item.name); fileName.title = item.name; info.appendChild(fileName);
       info.appendChild(element("span", formatText(item) + (number(item.size_bytes) ? " · " + sizeText(item.size_bytes) : ""), "hint"));
       info.appendChild(element("span", attachmentPhase(item), "phase"));
       row.appendChild(info);
       if (!pending) {
         var remove = element("button", "Убрать", "btn small");
         remove.type = "button"; remove.disabled = uploading && !item.error && !item.file_id;
+        remove.setAttribute("aria-label", "Убрать файл " + item.name);
         remove.title = "Убрать из этого сообщения; файл на диске не удаляется";
         remove.addEventListener("click", function () {
           if (pending || (uploading && !item.error && !item.file_id)) return;
@@ -378,6 +441,7 @@
   function errorMessage(text) {
     var div = element("div", undefined, "msg error"), info = problem({message: text}, false, "Требуется внимание");
     div.appendChild(element("strong", info.title)); paragraphs(div, info.lines); technical(div, {message: text}); elMessages.appendChild(div);
+    feedChanged();
   }
   function renderMessage(message) {
     if (messages[message.message_id]) return;
@@ -391,18 +455,23 @@
     else div.textContent = message.text;
     if (message.historical) div.appendChild(element("p", "Из сохранённой истории; состояние STE нужно перечитать.", "attachment-name"));
     (message.attachments || []).forEach(function (item) {
-      var note = element("p", undefined, "attachment-name");
+      var note = element("div", undefined, "message-attachment");
       if (item.file_id && !item.expired) (attachmentNotes[item.file_id] = attachmentNotes[item.file_id] || []).push({node: note, item: item});
       attachmentNote(note, item);
       div.appendChild(note);
     });
     elMessages.appendChild(div);
+    feedChanged();
   }
   function attachmentNote(node, item) {
-    var text = "Вложение: " + item.name + " (" + formatText(item) + ")";
-    if (item.expired) text += " — недоступно, загрузите снова (вложения не переживают перезапуск)";
-    else if ((item.kind || kindOf(item.name)) === "model") text += imported[item.file_id] ? " — импортировано в сцену" : " — прикреплено, в сцену не импортировано";
-    node.textContent = text;
+    clear(node);
+    node.appendChild(element("span", extensionOf(item.name).slice(1).toUpperCase() || "Файл", "file-icon"));
+    var info = element("div", undefined, "attachment-info"), name = element("strong", item.name);
+    name.title = item.name; info.appendChild(name);
+    info.appendChild(element("span", formatText(item) + (number(item.size_bytes) ? " · " + sizeText(item.size_bytes) : "")));
+    var text = item.expired ? "Вложение недоступно, загрузите снова" :
+      (item.kind || kindOf(item.name)) === "model" ? imported[item.file_id] ? "Импортировано в сцену" : "Прикреплено, в сцену не импортировано" : "Прикреплено к сообщению";
+    info.appendChild(element("span", text, "phase")); node.appendChild(info);
   }
   function markImported(fileId) {
     if (typeof fileId !== "string" || imported[fileId]) return;
@@ -420,16 +489,16 @@
         (plainValue(data.before) ? data.before === data.after ? " (значение не изменилось)" : " (подтверждено чтением)" : "")];
     }
     if (name === "get_slicer_state" && data.connected === true) return [data.machine && data.machine.name ? "Принтер: " + data.machine.name : "Принтер не выбран.",
-      "Режим: " + modeText(data.printing_mode), data.backend && data.backend.id ? "Движок: " + data.backend.id : "Движок не сообщён.",
+      "Режим: " + modeText(data.printing_mode),
       data.backend && data.backend.matches_mode === false ? "Движок не соответствует выбранному режиму. Проверьте состояние в STE Slicer." : null];
-    if (name === "get_model_bounds" && boundsText(data.bounds)) return [boundsText(data.bounds), data.object_id ? "ID объекта: " + data.object_id : null];
+    if (name === "get_model_bounds" && boundsText(data.bounds)) return [boundsText(data.bounds)];
     if ((name === "load_model" || name === "load_model_file") && Array.isArray(data.objects) && data.objects.length) {
       return ["Модель загружена" + (data.file_name ? ": " + data.file_name : "") + ". Объектов: " + data.objects.length + "."].concat(data.objects.map(function (model) {
-        return "ID: " + valueText(model.object_id) + (boundsText(model.bounds) ? ". " + boundsText(model.bounds) : "");
+        return boundsText(model.bounds);
       }));
     }
     if (name === "list_models" && Array.isArray(data.models)) return ["Объектов на сцене: " + data.models.length + "."].concat(data.models.map(function (model) {
-      return valueText(model.name) + " — " + valueText(model.object_id);
+      return valueText(model.name);
     }));
     if (name === "describe_settings" && Array.isArray(data.settings)) return [number(data.total) ?
       "Параметров найдено: " + data.total + "; получено на странице: " + data.settings.length + "." : "Получены параметры текущего стека: " + data.settings.length + ".",
@@ -437,20 +506,20 @@
       .concat(data.settings.slice(0, 6).map(function (setting) { return (labelFrom(settingNames, setting.key) || valueText(setting.label || setting.key)) + ": " + valueText(setting.value) +
         (typeof setting.unit === "string" ? " " + unitText(setting.unit) : "") + (setting.available === false ? " — недоступна" : setting.settable === false ? " — только чтение" : ""); }))
       .concat(data.settings.length > 6 ? ["Остальные параметры страницы и подробные описания — в технических деталях."] : []);
-    if (name === "get_slicing_result" && data.source === "ste_slicer") return estimates(data).concat(["ID нарезки: " + valueText(data.slice_id)]);
+    if (name === "get_slicing_result" && data.source === "ste_slicer") return estimates(data);
     if ((name === "start_slicing" || name === "get_slicing_status") && data.slice_id && data.state) return ["Нарезка: " + stateText(data.state) + ". " + progressText(data.progress),
-      "ID: " + data.slice_id, data.state === "completed" && !data.valid ? "УСТАРЕЛ / актуальность не подтверждена." : null,
+      data.state === "completed" && !data.valid ? "УСТАРЕЛ / актуальность не подтверждена." : null,
       data.state === "queued" || data.state === "running" ? "Запуск принят; завершение ещё не подтверждено." : null,
       data.error && data.error.message];
     if ((name === "export_gcode" || name === "save_project_3mf" || name === "get_export_status") && data.export_id && data.state) return [
-      "Экспорт: " + stateText(data.state) + ". " + progressText(data.progress), "ID: " + data.export_id,
+      "Экспорт: " + stateText(data.state) + ". " + progressText(data.progress),
       data.state === "completed" && !data.valid ? "Результат устарел / актуальность не подтверждена." :
       data.state === "completed" && data.artifact ? "Подтверждён файл: " + valueText(data.artifact.file_name) : "Готовый файл пока не подтверждён.", data.error && data.error.message]
       .concat(Array.isArray(data.warnings) ? data.warnings : []);
     if (name === "set_print_mode" && typeof data.after === "string") return ["Режим: " + modeText(data.after)];
-    if (name === "select_profile" && data.after && typeof data.after.quality_type === "string") return ["Профиль качества: " + data.after.quality_type];
-    if (name === "select_material" && data.after && data.after.material_id) return ["Материал экструдера " + valueText(data.extruder_id) + ": " + valueText(data.after.material_id)];
-    if (/custom_profile$/.test(name) && data.profile_id) return ["ID профиля: " + data.profile_id, data.name ? "Имя: " + data.name : null,
+    if (name === "select_profile" && data.after && typeof data.after.quality_type === "string") return ["Профиль качества: " + (data.after.name || data.after.quality_type)];
+    if (name === "select_material" && data.after && data.after.material_id) return [data.after.name ? "Материал: " + data.after.name : "Материал выбран; идентификаторы — в технических деталях."];
+    if (/custom_profile$/.test(name) && data.profile_id) return [data.name ? "Пользовательский профиль: " + data.name : "Получен пользовательский профиль.",
       data.persistence ? "Проверка памяти: " + (data.persistence.memory_verified === true ? "подтверждена" : "не подтверждена") +
         "; файлов: " + (data.persistence.disk_verified === true ? "подтверждена" : "не подтверждена") + "; восстановление после перезапуска требует отдельной проверки." : null];
     if (name === "list_custom_profiles" && Array.isArray(data.profiles)) return ["Пользовательских профилей: " + data.profiles.length];
@@ -458,10 +527,9 @@
     if (name === "list_materials" && Array.isArray(data.materials)) return ["Материалов: " + data.materials.length];
     if (/^(move|rotate|scale|center)_model$/.test(name) && data.object_id && typeof data.changed === "boolean") return transformLines(data);
     if (name === "delete_model" && data.removed === true) return ["Модель удалена из сцены (исходный файл не тронут). Отмена: Ctrl+Z в STE Slicer."];
-    if (name === "get_model_state" && data.object_id && data.position_mm) return ["ID объекта: " + data.object_id,
-      "Позиция X / Y↑ / Z: " + positionText(data.position_mm), boundsText(data.bounds)];
+    if (name === "get_model_state" && data.object_id && data.position_mm) return ["Позиция X / Y↑ / Z: " + positionText(data.position_mm), boundsText(data.bounds)];
     if ((name === "arrange_models" || name === "get_arrangement_status") && data.arrangement_id && data.state) return ["Расстановка: " + stateText(data.state),
-      "ID: " + data.arrangement_id, data.all_fit === false ? "Есть выход за границы стола." : "Полное размещение не подтверждено."];
+      data.all_fit === false ? "Есть выход за границы стола." : "Полное размещение не подтверждено."];
     return null;
   }
   function positionText(position) {
@@ -473,26 +541,73 @@
       "Позиция X / Y↑ / Z: " + positionText(before.position_mm) + (data.changed ? " → " + positionText(after.position_mm) : ""),
       after.bounds && boundsText(after.bounds)].concat(Array.isArray(data.warnings) ? data.warnings : []);
   }
-  function renderTool(kind, data) {
-    var key = (data.turn_id || "") + ":" + data.tool_call_id;
+  function actionGroup(key, known) {
+    if (groups[key]) return groups[key];
+    var panel = element("details", undefined, "action-group"), summary = element("summary"), list = element("div", undefined, "action-list");
+    var note = element("p", "", "action-note"); note.hidden = true;
+    panel.appendChild(summary); panel.appendChild(note); panel.appendChild(list); elMessages.appendChild(panel);
+    return (groups[key] = {panel: panel, summary: summary, list: list, note: note, items: [], known: known});
+  }
+  function updateGroup(group) {
+    var counts = {ok: 0, fail: 0, unknown: 0, pending: 0, running: 0, stale: 0};
+    group.items.forEach(function (item) { counts[item.state]++; });
+    var parts = [];
+    if (counts.ok) parts.push(counts.ok + " завершено");
+    if (counts.fail) parts.push(counts.fail + " с ошибкой");
+    if (counts.running) parts.push(counts.running + " выполняется");
+    if (counts.pending) parts.push(counts.pending + " ожидает завершения операции");
+    if (counts.stale) parts.push(counts.stale + " неактуально");
+    if (counts.unknown) parts.push(counts.unknown + " требует проверки");
+    group.summary.textContent = (group.known ? "Действия ассистента" : "Действие · ход не указан") + " · " + parts.join(", ");
+    group.panel.className = "action-group" + (counts.fail || counts.unknown || counts.stale ? " attention" : "");
+  }
+  function actionNotice(item, title, lines) {
+    if (!item.notice) { item.notice = element("div", undefined, "msg action-warning"); elMessages.appendChild(item.notice); }
+    clear(item.notice); item.notice.appendChild(element("strong", title)); paragraphs(item.notice, lines);
+  }
+  function unsettledTools() {
+    Object.keys(cards).forEach(function (key) {
+      var item = cards[key];
+      if (item.state !== "running") return;
+      item.state = "unknown"; item.card.className = "tool-card neutral";
+      item.head.textContent = item.label + " · результат не получен";
+      actionNotice(item, item.label + ": результат не подтверждён", ["Есть событие запуска без результата. Перечитайте состояние STE; не повторяйте изменение вслепую."]);
+      updateGroup(item.group);
+    });
+  }
+  function renderTool(kind, data, eventId) {
+    var known = typeof data.turn_id === "string" && !!data.turn_id && typeof data.tool_call_id === "string" && !!data.tool_call_id;
+    // Missing identifiers cannot establish that two historical events belong to one turn.
+    var key = known ? JSON.stringify([data.turn_id, data.tool_call_id]) : "unlinked:" + (eventId || ++ungrouped);
     var item = cards[key];
     if (!item) {
+      var group = actionGroup(known ? data.turn_id : key, known);
       var card = document.createElement("div"), head = document.createElement("div"), body = document.createElement("div");
       card.className = "tool-card"; head.className = "tool-head"; body.className = "tool-body";
-      card.appendChild(head); card.appendChild(body); elMessages.appendChild(card);
-      item = cards[key] = {card: card, head: head, body: body, started: false};
+      card.appendChild(head); card.appendChild(body); group.list.appendChild(card);
+      item = cards[key] = {card: card, head: head, body: body, started: false, group: group}; group.items.push(item);
     }
+    // A late duplicate started event must not erase an already received result.
+    if (kind === "tool_started" && item.finished) return;
     if (kind === "tool_started") { item.arguments = data.arguments; item.started = true; }
     var finished = kind === "tool_finished";
+    item.finished = finished;
     var result = data.result || {}, error = finished && result.error;
-    var rejected = !item.started && error && error.code === "invalid_tool_arguments" &&
+    var rejected = error && error.code === "invalid_tool_arguments" &&
       error.stage === "validation" && error.executed === false;
     var lines = finished && result.ok === true ? toolSummary(data.name, result.data, item.arguments) : null;
     var failedState = result.data && result.data.state === "failed";
-    var unsettled = result.data && (result.data.state && (result.data.state !== "completed" || result.data.valid !== true) ||
-      result.data.backend && result.data.backend.matches_mode === false);
-    item.card.className = "tool-card " + (!finished ? "running" : result.ok === false || failedState ? "fail" : lines && !unsettled ? "ok" : "neutral");
-    item.head.textContent = (labelFrom(toolNames, data.name) || "Инструмент") + (finished ? "" : " — выполняется");
+    var value = result.data || {}, waiting = value.state === "queued" || value.state === "running";
+    var stale = value.state === "completed" && value.valid === false;
+    var unsettled = value.state && (value.state !== "completed" || value.valid !== true) ||
+      value.backend && value.backend.matches_mode === false || value.observation && value.observation.state === "stopped";
+    var unknownError = error && error.executed !== false && error.operation_started !== false &&
+      (error.stage === "execution" || /(^qt_timeout$|^execution_error$|^tool_result_unconfirmed$|_timeout$|_not_applied$)/.test(error.code || ""));
+    item.state = !finished ? "running" : unknownError ? "unknown" : result.ok === false || failedState ? "fail" :
+      value.observation && value.observation.state === "stopped" ? "unknown" : stale ? "stale" : waiting ? "pending" : lines && !unsettled && result.ok === true ? "ok" : "unknown";
+    item.card.className = "tool-card " + (!finished ? "running" : item.state === "fail" ? "fail" : item.state === "ok" ? "ok" : "neutral");
+    item.label = labelFrom(toolNames, data.name) || "Инструмент";
+    item.head.textContent = item.label + (finished ? "" : " — выполняется");
     clear(item.body);
     while (item.card.children.length > 2) item.card.removeChild(item.card.children[2]);
     if (finished && result.ok === false) {
@@ -503,17 +618,21 @@
     } else paragraphs(item.body, finished ? lines || ["Ответ получен, но формат результата не распознан. Подтверждение операции смотрите в технических деталях."] :
       ["Запрос передан инструменту. Результат ещё не получен."]);
     if (failedState) paragraphs(item.body, ["Проверьте сообщения STE Slicer и состояние по ID. Не повторяйте запуск автоматически."]);
-    if (finished && result.argument_admission && result.argument_admission.field) {
-      paragraphs(item.body, ["Модель прислала " + result.argument_admission.field + " строкой; плагин разобрал его как число. Фактическое значение — выше, по чтению из STE."]);
-    }
-    if (finished && Array.isArray(result.argument_coercions) && result.argument_coercions.length) {
-      paragraphs(item.body, ["Аргументы модели исправлены перед запуском: " + result.argument_coercions.join("; ") + "."]);
+    if (finished && (result.argument_admission || Array.isArray(result.argument_coercions) && result.argument_coercions.length)) {
+      item.group.note.hidden = false;
+      item.group.note.textContent = "В этом ходе выполнен разбор аргументов модели. Подробности — в шагах; это не подтверждение изменения.";
     }
     if (finished && result.ok === true) {
       if (data.name === "load_model_file" && result.data) markImported(result.data.file_id);
       if (/^(load_model_file|load_model|move_model|rotate_model|scale_model|center_model|delete_model|get_arrangement_status|set_print_mode)$/.test(data.name)) sceneSoon();
     }
     technical(item.card, {tool: data.name, arguments: item.started ? item.arguments : "Не опубликованы", result: finished ? result : "Ожидается"});
+    if (finished && item.state !== "ok" && item.state !== "pending") {
+      actionNotice(item, item.head.textContent, item.state === "unknown" ? info ? info.lines : ["Результат не подтверждён. Перечитайте состояние STE перед новым изменением."].concat(lines || []) :
+        item.state === "stale" ? ["Результат устарел / актуальность не подтверждена. Требуется новая проверка состояния."] : info ? info.lines :
+        [value.error && value.error.message || "Операция завершилась с ошибкой. Проверьте STE; не повторяйте запуск автоматически."]);
+    } else if (item.notice) { elMessages.removeChild(item.notice); item.notice = null; }
+    updateGroup(item.group); feedChanged();
   }
   function progressBar(target, value) {
     if (!value || !number(value.progress) || value.state === "completed" || value.state === "failed") return;
@@ -524,6 +643,7 @@
   function renderSlice(slice) {
     var target = document.getElementById("slice-state");
     clear(target);
+    operationNote("slice", slice);
     if (!slice) { target.textContent = "Снимков нарезки ещё нет."; return; }
     paragraphs(target, ["Нарезка: " + stateText(slice.state), progressText(slice.progress),
       slice.state === "completed" ? slice.valid ? "Актуально на момент чтения." : "УСТАРЕЛ / актуальность не подтверждена." : null,
@@ -546,6 +666,7 @@
   function renderExport(value) {
     var target = document.getElementById("export-state");
     clear(target);
+    operationNote("export", value);
     if (!value) { target.textContent = "Своих экспортов ещё нет."; return; }
     paragraphs(target, ["Экспорт " + (value.kind === "project" ? "проекта 3MF" : value.kind === "gcode" ? "G-code" : "файла") + ": " + stateText(value.state),
       progressText(value.progress), value.state === "completed" && !value.valid ? "УСТАРЕЛ / актуальность не подтверждена." : null,
@@ -554,34 +675,63 @@
     observationWarning(target, value.observation);
     technical(target, {snapshot: value, observation: observationText(value.observation)});
   }
+  function operationNote(kind, value) {
+    var note = operationNotes[kind];
+    if (!value) {
+      if (note) elMessages.removeChild(note);
+      delete operationNotes[kind]; return;
+    }
+    if (!note) { note = operationNotes[kind] = element("div", undefined, "msg operation-message"); elMessages.appendChild(note); }
+    clear(note);
+    var label = kind === "slice" ? "Нарезка" : "Экспорт " + (value.kind === "project" ? "проекта 3MF" : value.kind === "gcode" ? "G-code" : "файла");
+    var stopped = value.observation && value.observation.state === "stopped";
+    var uncertain = value.state === "completed" && value.valid !== true;
+    note.className = "msg operation-message" + (stopped || uncertain || value.state === "failed" ? " action-warning" : "");
+    note.appendChild(element("strong", label + " · " + stateText(value.state)));
+    paragraphs(note, [value.state === "running" || value.state === "queued" ? progressText(value.progress) + ". Завершение ещё не подтверждено." : null,
+      uncertain ? "Результат устарел / актуальность не подтверждена." : null, value.error && value.error.message]);
+    progressBar(note, value);
+    if (value.result && value.result.source === "ste_slicer") paragraphs(note, estimates(value.result));
+    observationWarning(note, value.observation);
+    technical(note, {snapshot: value, observation: observationText(value.observation)}); feedChanged();
+  }
   function renderArtifact(artifact) {
     if (!artifact || typeof artifact.artifact_id !== "string") return;
+    if (!filesMounted) { elFileMessage.hidden = false; elMessages.appendChild(elFileMessage); filesMounted = true; }
     var row = artifacts[artifact.artifact_id];
     if (!row) {
       row = document.createElement("div");
       artifacts[artifact.artifact_id] = row; elArtifacts.appendChild(row);
     }
     while (row.firstChild) row.removeChild(row.firstChild);
-    row.textContent = artifact.file_name + " · " + (artifact.kind === "project" ? "Проект 3MF" : artifact.kind === "gcode" ? "G-code" : "Файл") +
-      " · " + (number(artifact.size_bytes) ? valueText(artifact.size_bytes) + " байт" : "размер не сообщён") + " · Нарезка: " + artifact.slice_id;
-    if (artifact.valid === true && typeof artifact.download_url === "string" &&
-        /^\/api\/files\/[A-Za-z0-9_-]{1,128}$/.test(artifact.download_url)) {
+    row.className = "artifact-row";
+    row.appendChild(element("span", artifact.kind === "project" ? "3MF" : artifact.kind === "gcode" ? "G-code" : "Файл", "file-icon"));
+    var info = element("div", undefined, "attachment-info"), name = element("strong", artifact.file_name);
+    name.title = artifact.file_name; info.appendChild(name);
+    info.appendChild(element("span", (artifact.kind === "project" ? "Проект STE" : artifact.kind === "gcode" ? "G-code" : "Файл") + " · " + sizeText(artifact.size_bytes)));
+    row.appendChild(info);
+    row.downloadReady = artifact.valid === true && !artifact.download_error && typeof artifact.download_url === "string" &&
+      /^\/api\/files\/[A-Za-z0-9_-]{1,128}$/.test(artifact.download_url);
+    if (row.downloadReady) {
       var link = document.createElement("a");
-      link.textContent = " Скачать"; link.href = artifact.download_url;
+      link.textContent = "Скачать"; link.href = artifact.download_url; link.className = "btn small";
       link.target = "_blank"; link.rel = "noopener";
       row.appendChild(link);
-    } else row.textContent += artifact.valid === false ? " — устарел / недоступен" : " — локальный результат, скачивание не подтверждено";
-    if (artifact.download_error) row.textContent += " — " + artifact.download_error.message;
+    } else info.appendChild(element("span", artifact.valid === false ? "Устарел — требуется новая нарезка / проверка состояния" : "Локальный результат, скачивание не подтверждено", "file-warning"));
+    if (artifact.download_error) info.appendChild(element("span", artifact.download_error.message, "file-warning"));
     technical(row, artifact);
+    document.getElementById("file-message-title").textContent = Object.keys(artifacts).some(function (id) { return artifacts[id].downloadReady; }) ? "Файлы готовы" : "Файлы экспорта · доступность не подтверждена";
+    feedChanged();
   }
   function applyEvent(event) {
     var data = event.data || {};
     if (event.type === "agent_state") {
       sessionBusy = data.state === "processing";
       if (!sessionBusy) globalBusy = false;
-      elState.textContent = sessionBusy ? "Агент выполняет запрос..." : "Ответ агента завершён. Состояние нарезки и экспорта показано отдельно.";
+      elState.textContent = sessionBusy ? "Агент выполняет запрос…" : "Ожидание запроса";
+      if (!sessionBusy) unsettledTools();
     } else if (event.type === "assistant_message") renderMessage(data);
-    else if (event.type === "tool_started" || event.type === "tool_finished") renderTool(event.type, data);
+    else if (event.type === "tool_started" || event.type === "tool_finished") renderTool(event.type, data, event.id);
     else if (event.type === "slice_progress") renderSlice(data);
     else if (event.type === "slice_finished") renderSlice(data);
     else if (event.type === "export_progress") renderExport(data);
@@ -589,32 +739,39 @@
     else if (event.type === "error" && !data.related_id) errorMessage(data.message);
     buttons();
   }
+  function resetFeed() {
+    clear(elMessages); clear(elArtifacts); filesMounted = false;
+    cards = {}; messages = {}; groups = Object.create(null); ungrouped = 0;
+    artifacts = Object.create(null); operationNotes = Object.create(null);
+    imported = Object.create(null); attachmentNotes = Object.create(null);
+  }
   function adopt(snapshot) {
     processId = snapshot.process_id || processId;
     if (pending && ((pending.process_id && processId && pending.process_id !== processId) || (!pending.process_id && snapshot.restored))) {
       expiredPending = true; pending = null; dropSelected(); save("ste_ai_pending", null); elInput.value = "";
     }
-    while (elMessages.firstChild) elMessages.removeChild(elMessages.firstChild);
-    cards = {}; messages = {};
-    while (elArtifacts.firstChild) elArtifacts.removeChild(elArtifacts.firstChild);
-    artifacts = Object.create(null);
-    (snapshot.artifacts || []).forEach(renderArtifact);
+    var oldScroll = elMessages.scrollTop, openGroups = Object.keys(groups).filter(function (key) { return groups[key].panel.open; });
+    resetFeed();
     var timeline = snapshot.messages.map(function (message) {
       return {id: message.event_id || 0, message: message};
     }).concat((snapshot.tool_events || []).map(function (event) { return {id: event.id, event: event}; }));
     timeline.sort(function (a, b) { return a.id - b.id; });
     timeline.forEach(function (item) {
       if (item.message) renderMessage(item.message);
-      else renderTool(item.event.type, item.event.data);
+      else renderTool(item.event.type, item.event.data, item.event.id);
     });
+    openGroups.forEach(function (key) { if (groups[key]) groups[key].panel.open = true; });
+    (snapshot.artifacts || []).forEach(renderArtifact);
     if (expiredPending) {
       errorMessage("Неподтверждённая отправка прежнего процесса истекла и автоматически не повторялась. Проверьте историю и текущее состояние STE.");
       expiredPending = false;
     }
     after = snapshot.last_event_id;
     sessionBusy = snapshot.agent_state === "processing";
+    if (!sessionBusy) unsettledTools();
     operationBusy = !!snapshot.operation_busy;
     document.getElementById("chat-title").textContent = snapshot.title || "Диалог с ИИ-технологом";
+    document.getElementById("chat-title").title = snapshot.title || "Диалог с ИИ-технологом";
     renderPersistence(snapshot.persistence, snapshot.history_truncated);
     renderSlice(snapshot.slice);
     renderExport(snapshot.export);
@@ -627,6 +784,8 @@
       elState.textContent = "Есть неподтверждённая отправка. Повтор использует прежний client_message_id.";
     } else elState.textContent = sessionBusy ? "Агент выполняет запрос..." : "Диалог восстановлен.";
     attachmentList(); buttons();
+    if (!followFeed) elMessages.scrollTop = oldScroll;
+    feedChanged();
   }
   function restore() {
     var current = ++generation;
@@ -635,13 +794,14 @@
     });
   }
   function newSession() {
+    followFeed = true; switching = true; buttons();
     ++generation;
     return post("/api/sessions", {}).then(function (snapshot) {
       sessionId = snapshot.session_id; pending = null; dropSelected(); after = 0;
       save("ste_ai_session_id", sessionId); save("ste_ai_pending", null); adopt(snapshot);
-      elInput.value = ""; historyChoice = sessionId;
+      elInput.value = ""; autosize(); closeSidebar(false); elInput.focus();
       return loadSessions();
-    });
+    }).then(function () { switching = false; buttons(); }, function (err) { switching = false; buttons(); throw err; });
   }
   function loadStatus() {
     return api("/api/status").then(function (status) {
@@ -655,6 +815,8 @@
       }
       var badge = document.getElementById("status-badge");
       badge.textContent = status.llm.configured ? "LLM настроена; связь не проверена" : "Нужны настройки LLM";
+      document.getElementById("connection-card").firstElementChild.title = badge.textContent;
+      document.getElementById("connection-card").firstElementChild.textContent = status.llm.configured ? "LLM: задана" : "LLM: не задана";
       badge.className = "badge " + (status.llm.configured ? "ok" : "warn");
       document.getElementById("cfg-state").textContent = status.llm.has_key ? "Ключ сохранён в Preferences." : "Ключ не подтверждён.";
       document.getElementById("st-printer").textContent = status.slicer.machine_name || "STE недоступен / машина не выбрана";
@@ -891,7 +1053,7 @@
       {text: attempt.text, attachment_ids: attempt.attachment_ids || [], client_message_id: attempt.client_message_id}).then(function () {
         if (pending !== attempt || attempt.session_id !== sessionId || (attempt.process_id && processId && attempt.process_id !== processId)) return;
         // Read the accepted user message; never add a second optimistic copy.
-        pending = null; dropSelected(); save("ste_ai_pending", null); elInput.value = "";
+        pending = null; dropSelected(); save("ste_ai_pending", null); elInput.value = ""; attachmentList(); buttons();
         return restore();
       }).catch(function (err) {
         if (pending !== attempt || attempt.session_id !== sessionId || (attempt.process_id && processId && attempt.process_id !== processId)) return;
@@ -909,11 +1071,9 @@
   elFiles.addEventListener("change", chooseFiles);
   elInput.addEventListener("input", autosize);
   elInput.addEventListener("keydown", function (event) {
-    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); if (!elSend.disabled) send(elInput.value); }
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); if (!elSend.disabled) send(elInput.value); }
   });
   elNew.addEventListener("click", function () { if (!elNew.disabled) newSession().catch(function (err) { errorMessage(err.message); }); });
-  elOpen.addEventListener("click", function () { if (!elOpen.disabled) openSession(historyChoice).catch(function (err) { elHistoryStatus.textContent = err.message; }); });
-  elDelete.addEventListener("click", deleteSession);
   var chips = document.querySelectorAll(".chip");
   for (var i = 0; i < chips.length; i++) {
     chips[i].addEventListener("click", function () { elInput.value = this.getAttribute("data-prompt"); send(elInput.value); });

@@ -8,46 +8,23 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
-      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-        <path d="M16 3 28 10v12L16 29 4 22V10z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
-        <path d="M4 10l12 7 12-7M16 17v12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
-        <circle cx="25.5" cy="6.5" r="4" fill="#30B6E7"/>
-      </svg>
-      <div class="brand-text"><strong>STE Slicer</strong><span>AI Assistant</span></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">◇</span><strong>STE Slicer <span>AI</span></strong></div>
+    <button id="btn-sidebar" class="btn mobile-only" type="button" aria-controls="sidebar" aria-expanded="false">Диалоги</button>
+    <div class="topbar-status" aria-label="Прочитанное состояние STE">
+      <strong id="st-printer" title="Прочитанная машина">—</strong><span id="st-mode">—</span>
     </div>
-    <div class="topbar-status" aria-label="Состояние">
-      <span class="pill"><span class="pill-label">LLM</span><span id="status-badge" class="badge">Проверка…</span></span>
-      <span class="pill"><span class="pill-label">Принтер</span><strong id="st-printer">—</strong></span>
-      <span class="pill"><span class="pill-label">Режим</span><strong id="st-mode">—</strong></span>
-    </div>
-  </header>
-
-  <div class="layout">
-    <aside class="sidebar" aria-label="Панель управления">
-      <details class="panel chat-history" id="chat-history">
-        <summary class="panel-head">Диалоги</summary>
-        <div class="panel-body">
-          <p id="history-status" class="hint" role="status">Чтение списка…</p>
-          <div id="chat-list" role="list" aria-label="Список диалогов"></div>
-          <div class="history-actions">
-            <button id="btn-open-session" class="btn">Открыть</button>
-            <button id="btn-delete-session" class="btn ghost">Удалить</button>
-          </div>
-        </div>
-      </details>
-
-      <section class="panel" aria-labelledby="job-title">
-        <h2 class="panel-head" id="job-title">Нарезка и файлы</h2>
-        <div class="panel-body">
+    <nav class="toolbar" aria-label="Состояние и управление">
+      <details class="top-disclosure" id="state-card">
+        <summary class="toolbar-button">Состояние</summary>
+        <div class="panel-body disclosure-body">
+          <h2>Нарезка и экспорт</h2>
           <div id="slice-state" class="state-block">Снимков нарезки ещё нет.</div>
           <div id="export-state" class="state-block">Своих экспортов ещё нет.</div>
         </div>
-      </section>
-
-      <details class="panel" id="scene-card" open>
-        <summary class="panel-head">Модели на сцене</summary>
-        <div class="panel-body">
+      </details>
+      <details class="top-disclosure" id="scene-card">
+        <summary class="toolbar-button">Модели</summary>
+        <div class="panel-body disclosure-body">
           <div class="card-head">
             <p id="scene-status" class="hint" role="status">Сцена ещё не прочитана.</p>
             <button id="btn-scene-refresh" class="btn small ghost" type="button">Обновить</button>
@@ -92,8 +69,27 @@
         </div>
       </details>
 
-      <section class="panel" aria-labelledby="quick-title">
-        <h2 class="panel-head" id="quick-title">Быстрые запросы</h2>
+      <details class="top-disclosure" id="connection-card">
+        <summary class="toolbar-button">Подключение</summary>
+        <div class="panel-body disclosure-body">
+          <h2>Подключение LLM</h2>
+          <p id="status-badge" class="badge">Проверка…</p>
+          <p class="hint">URL, модель и ключ задаются в меню STE Slicer: <strong>Расширения → AI Assistant → LLM Settings</strong>.</p>
+          <p id="cfg-state" class="hint">Настройки ещё не прочитаны.</p>
+        </div>
+      </details>
+    </nav>
+  </header>
+  <div class="layout">
+    <aside class="sidebar" id="sidebar" aria-label="Диалоги и быстрые команды">
+      <button id="btn-new-session" class="btn primary" type="button">＋ Новый диалог</button>
+      <section class="chat-history" id="chat-history" aria-labelledby="history-title">
+        <h2 id="history-title">Диалоги</h2>
+        <p id="history-status" class="hint" role="status">Чтение списка…</p>
+        <div id="chat-list" role="list" aria-label="Список диалогов"></div>
+      </section>
+      <details class="quick-commands" open>
+        <summary>Быстрые команды</summary>
         <div class="panel-body chips">
           <button class="chip primary-chip" data-prompt="Подготовь прикреплённую модель к печати: выбери режим (3D или 5D), материал и профиль, импортируй и сориентируй модель, нарежь и сохрани G-code и проект 3MF. Объясни принятые решения.">Подготовить модель к печати</button>
           <button class="chip" data-prompt="Прочитай текущую высоту слоя layer_height.">Прочитать высоту слоя</button>
@@ -101,45 +97,44 @@
           <button class="chip" data-prompt="Прочитай состояние машины и фактический backend через get_slicer_state.">Состояние STE</button>
           <button class="chip" data-prompt="Что ты умеешь и какие инструменты тебе доступны?">Что умеешь?</button>
         </div>
-      </section>
-
-      <details class="panel">
-        <summary class="panel-head">Подключение LLM</summary>
-        <div class="panel-body">
-          <p class="hint">URL, модель и ключ задаются в меню STE Slicer: <strong>Расширения → AI Assistant → LLM Settings</strong>.</p>
-          <p id="cfg-state" class="hint">Настройки ещё не прочитаны.</p>
-        </div>
       </details>
     </aside>
-
-    <main class="chat-panel">
+    <main class="chat-panel" id="chat-panel">
       <header class="chat-header">
         <div class="chat-heading">
           <strong id="chat-title">Диалог с ИИ-технологом</strong>
           <span id="save-state" class="sub" role="status"></span>
-          <span id="agent-state-text" class="sub">Ожидание запроса</span>
         </div>
-        <button id="btn-new-session" class="btn primary">Новый диалог</button>
+        <span id="agent-state-text" class="sub" role="status">Ожидание запроса</span>
       </header>
-
-      <div id="messages" class="messages" role="log" aria-label="Переписка и результаты инструментов"></div>
-
+      <div class="feed-wrap">
+        <div id="messages" class="messages" role="log" aria-label="Переписка, действия и файлы"></div>
+        <button id="btn-latest" class="btn latest" type="button" hidden>Новые события ↓</button>
+      </div>
       <div class="composer">
-        <div id="artifacts" class="artifacts" aria-live="polite"></div>
+        <p id="attachment-status" class="file-warning hint" role="status" hidden></p>
         <div id="attachment-list" aria-live="polite"></div>
         <form id="chat-form" class="chat-input-bar">
           <label class="attach-btn" title="Прикрепить фото или модель">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.5 6.5 8.4 14.6a2 2 0 0 0 2.8 2.8l8.1-8.1a4 4 0 0 0-5.7-5.7L5.5 11.7a6 6 0 0 0 8.5 8.5l6.2-6.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <span class="visually-hidden">Прикрепить файл</span>
-            <input id="chat-files" class="visually-hidden" type="file" multiple accept=".jpg,.jpeg,.png,.stl,.obj,.3mf">
+            <input id="chat-files" class="visually-hidden" type="file" multiple accept=".jpg,.jpeg,.png,.stl,.obj,.3mf" aria-describedby="attachment-limits">
           </label>
-          <textarea id="chat-input" rows="1" maxlength="12000" placeholder="Например: «Кронштейн под нагрузку, PETG, без поддержек» и прикрепите STL"></textarea>
-          <button type="submit" id="btn-send" class="btn primary send">Отправить</button>
+          <textarea id="chat-input" rows="1" maxlength="12000" aria-label="Сообщение ассистенту" placeholder="Опишите задачу печати…"></textarea>
+          <button type="submit" id="btn-send" class="btn primary send" aria-label="Отправить" title="Отправить">↑</button>
         </form>
-        <p class="composer-hint"><span id="attachment-limits">Вложения: фото JPG/PNG и модели STL/OBJ/3MF (до 5)</span> · Enter — отправить, Shift+Enter — новая строка</p>
+        <div class="composer-footer">
+          <span>Enter — отправить · Shift+Enter — строка</span>
+          <details class="file-limits"><summary>Форматы и лимиты</summary><p id="attachment-limits">Фото JPG/PNG и модели STL/OBJ/3MF</p></details>
+        </div>
       </div>
     </main>
   </div>
+  <section id="file-message" class="msg file-message" hidden aria-label="Выходные файлы">
+    <strong id="file-message-title">Файлы экспорта</strong>
+    <p class="hint">Результаты экспорта из этой ленты. Актуальность проверяется при скачивании.</p>
+    <div id="artifacts" class="artifacts"></div>
+  </section>
   <script src="/app.js"></script>
 </body>
 </html>
