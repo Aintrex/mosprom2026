@@ -116,3 +116,16 @@ if ($fullStatus.state -eq 'completed' -and $fullStatus.valid) {
 A готово к ревью в исходниках/подменах; реальная атрибуция quit и прогон2/5/7 остаются открыты. B не закрыто: обнаружены потеря stderr и fallback, но точная причина exit1 неизвестна и безопасный native-патч вне полномочий этого задания не применён. Плагин не может достоверно обнаружить проглоченное native исключение через публичный результат Job; global Logger/native handlers не перехватывались.
 
 Сохранены начальные чужие изменения `docs/COORDINATION.md` и файл текущего ТЗ. Один plugin/registry/QtBridge; classic/Spiral, writers, frozen/helper, настройки пользователя и исходные модели не менялись. Нет Git add/commit/push/merge/переключений, AppData-установки, реальной LLM/STE/MCP/engines/принтера. Исследовательские скрипты/копия HEAD находятся только под ignored tmp. После отчёта работа остановлена для ревью ведущего.
+
+## Ревью 25.10 — поправка после интеграции
+
+Принято: отложенная проверка неатрибутированного `backendQuit`, финал полного 5D только после внешнего Done и очистки `_slicing`, stage/diagnostics.
+
+Изменено одно правило. Ненулевой код выхода процесса стадии, которая **уже отдала результат** (Cura после запуска Glicer; парсер после финального сообщения), больше не переводит запуск в failed, а пишется в diagnostics (`settled_process_exited`). Причины по исходникам:
+- после `_onSlicingFinishedMessage` G-code Cura уже в буфере, Glicer — отдельный процесс;
+- парсер после финала штатно завершается и пересоздаётся (`CliParserBackend._onSocketError → _terminate → _createSocket`), как в 5D Spiral, где это уже не считается ошибкой;
+- `Popen.terminate()` на Windows задаёт код 1, поэтому штатное гашение процесса неотличимо от «ненулевого выхода».
+
+Выход **до** результата стадии по-прежнему ошибка: тест с кодом 9 до доставки Cura сохранён. Тест `test_current_nonzero_parser_is_not_hidden_by_final_done` заменён на `test_parser_exit_code_after_final_message_does_not_void_delivered_gcode`; добавлен `test_settled_cura_killed_during_glicer_stage_does_not_fail_run`. На прежней версии оба падают.
+
+`test_busy_second_export_is_not_started_and_turn_continues` теперь дожидается окончания принятой записи G-code: прежний WinError32 при очистке был артефактом теста (файл ещё открыт writer'ом), а не дефектом плагина. Полный набор: 412 Python OK, 34 JS OK.

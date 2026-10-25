@@ -131,6 +131,9 @@ class OperationEventsTests(unittest.TestCase):
         self.assertFalse(snapshot["messages"][-1]["is_error"])
         self.assertEqual(len(self.llm.requests), 2, "The model got the refusal and answered; the turn was not cut")
         self.assertTrue(self.adapter.get_slicing_status(self.slice_id)["data"]["valid"], "A refusal does not stale the slice")
+        # Let the accepted G-code writer finish: Windows cannot delete the still-open temp file.
+        self.assertEqual(self.wait_status(results[0]["data"]["export_id"])["state"], "completed")
+        self.clean_workers()
 
     def test_duplicate_reads_and_terminal_do_not_consume_events_or_poll_forever(self):
         self.launch_slice()

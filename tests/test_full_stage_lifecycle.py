@@ -137,15 +137,32 @@ class FullLifecycleTests(unittest.TestCase):
         self.drain()
         self.assertEqual(self.status()['state'], 'completed')
 
-    def test_current_nonzero_parser_is_not_hidden_by_final_done(self):
-        self.parser()
-        self.backend.parser_data()
-        self.backend.children['CLIParserBackend']._process.code = 3
-        self.backend.finish()
+    def test_parser_exit_code_after_final_message_does_not_void_delivered_gcode(self):
+        # STE restarts the parser after its final message (_onSocketError -> _terminate, code 1
+        # on Windows); the complete G-code is already delivered, as in 5D Spiral.
+        for code in (1, 3):
+            with self.subTest(code=code):
+                self.parser()
+                self.backend.parser_data()
+                self.backend.children['CLIParserBackend']._process.code = code
+                self.backend.finish()
+                self.drain()
+                status = self.status()
+                self.assertEqual((status['state'], status['valid']), ('completed', True), status)
+                self.assertTrue(self.adapter.get_slicing_result(self.slice_id)['ok'])
+                self.stop_fake()
+
+    def test_settled_cura_killed_during_glicer_stage_does_not_fail_run(self):
+        self.cura()
+        self.backend.cura_finished()
         self.drain()
-        self.assertEqual(self.status()['state'], 'failed')
-        self.assertEqual(self.status()['diagnostics']['process'], 'cli_parser')
-        self.assertEqual(self.status()['diagnostics']['exit_code'], 3)
+        self.assertTrue(self.adapter._slicing.record.cli.cura_done)
+        self.backend.children['CuraEngineBackend']._process.code = 1  # Native _terminate on Windows.
+        self.backend.backendQuit.emit()
+        self.drain()
+        status = self.status()
+        self.assertEqual(status['state'], 'running', status)
+        self.assertEqual((status['diagnostics']['event'], status['diagnostics']['exit_code']), ('settled_process_exited', 1))
 
     def test_unobserved_parser_process_cannot_complete_from_signals(self):
         self.parser()

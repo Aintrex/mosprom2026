@@ -180,10 +180,17 @@ class FullStages(object):
         elif backend._process is not process and not settled:
             self._fail("slicing_conflict", "Поздняя смена процесса подчинённого backend")
         code = process.poll() if process is not None else None
+        if settled:
+            # The stage already delivered its output (Cura G-code is in the buffer, Glicer is a
+            # separate process). A later exit, including native _terminate (code 1 on Windows),
+            # cannot invalidate it; keep it as a diagnostic only, like the 5D Spiral observer.
+            if code is not None and code != 0:
+                self._diagnose("settled_process_exited", self._name(endpoint), code)
+            return
         if code is not None and code != 0:
             self._diagnose("process_exited", self._name(endpoint), code)
             self._fail("slicing_parser_failed", "Собственный %s завершился с ненулевым кодом" % self._name(endpoint))
-        elif code == 0 and not settled and not endpoint["exit_pending"] and not endpoint["exit_confirmed"]:
+        elif code == 0 and not endpoint["exit_pending"] and not endpoint["exit_confirmed"]:
             endpoint["exit_pending"] = True
             self._later(self._confirm_exit, endpoint, process)
 
@@ -299,11 +306,8 @@ class FullStages(object):
                     self.process_unknown = True
                     self._diagnose("process_not_observed", self._name(endpoint))
                     self._fail("slicing_parser_failed", "Не подтверждён собственный процесс %s полного режима" % self._name(endpoint))
-                if process is not None and endpoint["backend"]._process is process:
-                    code = process.poll()
-                    if code is not None and code != 0:
-                        self._diagnose("process_exited", self._name(endpoint), code)
-                        self._fail("slicing_parser_failed", "Собственный %s завершился с ненулевым кодом" % self._name(endpoint))
+                # Exit codes after the final message are not checked: the parser has delivered
+                # the complete G-code and STE restarts it natively (see 5D Spiral).
             self.parser_done = True  # Also settles read-only shutdown/failed guards.
             self.observe()
             r.stage = self._stage()
